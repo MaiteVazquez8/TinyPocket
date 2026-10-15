@@ -217,7 +217,13 @@ uint8_t bjValorCarta(uint8_t valor) { return valor == 1 ? 11 : valor; }
 * Hasta 5 cartas por jugador. La segunda carta de la banca sale como `?` hasta
   el final.
 * Se reparten **de una en una cada 600 ms**, sin bloquear el programa.
-* La partida termina al ganar o perder 3 rondas.
+* Al plantarse (o al pasarse) **la banca pide cartas hasta llegar a 17**, que es
+  la regla del blackjack. Antes la banca se quedaba con sus dos cartas: eso se
+  corrigió.
+* La partida termina al ganar o perder **3 rondas**. El marcador `victorias-derrotas`
+  se ve junto al resultado de cada ronda; al llegar a 3, OK arranca una
+  **revancha** que pone el marcador a cero, y mientras la partida sigue viva OK
+  reparte cartas nuevas conservando el marcador.
 
 ## 13. Snake
 
@@ -250,6 +256,19 @@ if (millis() - ultimoFrame < FRAME_TIME) return;
 El único `delay()` del programa está en `setup()`, para mostrar la pantalla de
 inicio unos 600 ms.
 
+### Las marcas de tiempo son de 32 bits
+
+Todas las variables que guardan un instante (`ppUltimoPaso`, `boUltimoPaso`,
+`maUltimoTic`, `bjUltimoPaso`, `snUltimoPaso` y las dos del antirrebote) son
+`unsigned long`, no `uint16_t`.
+
+No es un detalle menor: con `uint16_t`, en cuanto `millis()` pasa de 65535 ms
+(unos 65 segundos de funcionamiento) el valor guardado se recorta, y la resta
+`ahora - marca` da un número enorme en vez del intervalo real. El resultado es
+que **todos los juegos perdían el límite de fotogramas** y se movían a la
+velocidad del bucle. Cuesta 24 bytes de SRAM y unos 180 de flash, y con el
+margen que hay se paga sin problema.
+
 ## 15. Cómo compilar
 
 | Parámetro | Valor |
@@ -271,7 +290,7 @@ Los que da el compilador, no estimaciones:
 
 | Programa | Flash | % | SRAM | % |
 | --- | --- | --- | --- | --- |
-| `src/tinyPocket.ino` | 7968 B | 97 % | 287 B | 56 % |
+| `src/tinyPocket.ino` | 5622 B | 69 % | 267 B | 52 % |
 | `src/examples/ejemploPelotaRebote.ino` | 3162 B | 39 % | 151 B | 29 % |
 | `src/examples/ejemploPingPong.ino` | 3074 B | 38 % | 145 B | 28 % |
 | `src/examples/ejemploBreakout.ino` | 3250 B | 40 % | 154 B | 30 % |
@@ -279,9 +298,8 @@ Los que da el compilador, no estimaciones:
 | `src/examples/ejemploBlackjack.ino` | 3298 B | 40 % | 137 B | 27 % |
 | `src/examples/ejemploOjosMascota.ino` | 3500 B | 43 % | 276 B | 54 % |
 
-El programa principal está al **97 % de la flash**, así que es la pieza que
-cuesta más de mantener: si se añade una función grande hay que revisar esta
-tabla.
+El programa principal está al **69 % de la flash** y al **52 % de la SRAM**, así que
+todavía queda margen para añadir cosas.
 
 ## 17. Reglas para modificar este archivo
 
@@ -303,7 +321,8 @@ tabla.
 * El **Snake juega en 32 celdas**, que es el tablero completo del LCD; con
   Buffers del OLED el mismo juego tiene cientos de casillas.
 * No quedan pines libres para más de tres botones.
-* La flash está al 97 %: no hay sitio para añadir juegos nuevos sin quitar algo.
+* La flash quedó al 69 % tras las correcciones: hay margen, pero sigue siendo la
+  versión más apretada por número de bytes.
 
 ## 19. Organizaciones y recursos
 

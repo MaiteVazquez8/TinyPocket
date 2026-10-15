@@ -26,7 +26,7 @@ funciones:
 | Ping Pong | Pelota, paleta y rebote en las cuatro paredes |
 | Breakout | Ladrillos, colisiones en cuatro direcciones y vidas |
 | Mascota | Estadísticas, cuatro acciones y cara animada |
-| Blackjack | Mazo, reparto y resultado |
+| Blackjack | Mazo, reparto, banca hasta 17 y partida a 3 victorias |
 | Snake | Controlado por el jugador |
 | Info | Pantalla de información |
 
@@ -62,12 +62,14 @@ Números reales dados por el compilador:
 
 | Versión | Flash | % | SRAM | % |
 | --- | --- | --- | --- | --- |
-| Mega 2560 | 41816 B | 16 % | 3169 B | 39 % |
-| Arduino Uno | 30964 B | **96 %** | 1753 B | **86 %** |
-| ATtiny85 | 7968 B | **97 %** | 287 B | 56 % |
+| Mega 2560 | 42112 B | 17 % | 3220 B | 39 % |
+| Arduino Uno | 31218 B | **97 %** | 1240 B | 61 % |
+| ATtiny85 | 5622 B | 69 % | 267 B | 52 % |
 
-El Mega va sobrado; el Uno y el ATtiny85 justos. Antes de añadir una función
-nueva hay que mirar estas dos filas.
+El Mega va sobrado. El ATtiny85 tiene margen de sobra. El Uno es el
+apretado: casi sin flash, aunque su RAM se sacó de aprietos pasando todos los
+textos a flash con `F()`. Antes de añadir una función nueva hay que mirar estas
+filas.
 
 ## Cómo compilar
 

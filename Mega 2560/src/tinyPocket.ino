@@ -188,7 +188,9 @@ int bjAnchoGrupo(int cantidad);
 void bjActualizarPosicionesCartas();
 void bjAgregarCarta(bool jugador, bool oculta);
 void bjRevelarCartaCasa();
+void nuevaPartidaBJ();
 void nuevaRondaBJ();
+void bjSumarResultado();
 void bjActualizarAnimaciones();
 void bjDibujarCorazon(int x, int y);
 void bjDibujarDiamante(int x, int y);
@@ -1094,12 +1096,34 @@ void bjRevelarCartaCasa() {
   for (int i = 0; i < bjCantidadCartas; i++)
     if (!bjCartas[i].jugador && bjCartas[i].oculta) { bjCartas[i].oculta = false; break; }
 }
+// Regla de partida: se gana al llegar a 3 victorias y se pierde al
+// llegar a 3 derrotas, igual que en la version del ATtiny85.
+const int BJ_META_VICTORIAS = 3;
+const int BJ_META_DERROTAS = 3;
+int bjVictorias = 0, bjDerrotas = 0;
+bool bjPartidaTerminada = false;
+
+// Empezar la PARTIDA: marcador a cero.
+void nuevaPartidaBJ() {
+  bjVictorias = 0; bjDerrotas = 0;
+  bjPartidaTerminada = false;
+  nuevaRondaBJ();
+}
+// Empezar una RONDA: cartas nuevas, pero se conserva el marcador.
 void nuevaRondaBJ() {
   bjCantidadCartas = 0; bjCartasJugador = 0; bjCartasCasa = 0;
   bjResultado = 0; bjEstadoJuego = BJ_REPARTO_INICIAL;
   bjPasoInicial = BJ_INICIO_JUGADOR_1;
   bjCrearMazo(); bjMezclarMazo();
   bjUltimaCarta = millis();
+}
+// Suma el resultado de la ronda al marcador de la partida.
+void bjSumarResultado() {
+  if (bjResultado == BJ_RESULTADO_EMPATE) return;
+  if (bjResultado == BJ_RESULTADO_JUGADOR) bjVictorias++;
+  else bjDerrotas++;
+  if (bjVictorias >= BJ_META_VICTORIAS || bjDerrotas >= BJ_META_DERROTAS)
+    bjPartidaTerminada = true;
 }
 void bjActualizarAnimaciones() {
   for (int i = 0; i < bjCantidadCartas; i++) {
@@ -1201,6 +1225,7 @@ void bjActualizarJuego() {
   } else if (bjEstadoJuego == BJ_CASA) bjTurnoCasa();
   else if (bjEstadoJuego == BJ_ESPERANDO_RESULTADO) {
     if (millis() - bjInicioEsperaResultado >= BJ_TIEMPO_ANTES_RESULTADO) {
+      bjSumarResultado();   // suma esta ronda al marcador de la partida
       bjEstadoJuego = BJ_RESULTADO; bjInicioResultado = millis();
     }
   }
@@ -1221,7 +1246,9 @@ void bjDibujarJuego() {
 }
 void bjDibujarResultado() {
   pantalla.clearBuffer();
-  if (bjResultado == BJ_RESULTADO_JUGADOR) {
+  if (bjPartidaTerminada) {
+    textoCentrado(bjVictorias > bjDerrotas ? "Ganaste!" : "Perdiste", 28, u8g2_font_10x20_tf);
+  } else if (bjResultado == BJ_RESULTADO_JUGADOR) {
     textoCentrado("Ganaste!", 30, u8g2_font_10x20_tf);
   } else if (bjResultado == BJ_RESULTADO_CASA) {
     textoCentrado("Gana", 22, u8g2_font_10x20_tf);
@@ -1235,14 +1262,27 @@ void bjDibujarResultado() {
   pantalla.drawStr(6, 56, buf);
   sprintf(buf, "Vos %d", bjPuntajeJugador());
   pantalla.drawStr(84, 56, buf);
-  textoCentrado("OK otra | mant: menu", 63, u8g2_font_4x6_tf);
+  // Marcador de la partida: victorias - derrotas.
+  pantalla.setFont(u8g2_font_5x8_tf);
+  sprintf(buf, "Ronda %d-%d", bjVictorias, bjDerrotas);
+  pantalla.drawStr(6, 48, buf);
+  textoCentrado(bjPartidaTerminada ? "OK revancha | mant: menu"
+                                : "OK otra | mant: menu", 63, u8g2_font_4x6_tf);
   pantalla.sendBuffer();
 }
 void procesarBlackjack() {
   if (ok.largo) { volverAlMenu(); return; }
   if (bjEstadoJuego == BJ_RESULTADO) {
-    if (ok.corto) nuevaRondaBJ();
-    else if (millis() - bjInicioResultado >= BJ_TIEMPO_RESULTADO) nuevaRondaBJ();
+    // Partida cerrada: revancha de verdad. Si sigue viva, solo se
+    // reparten cartas nuevas y el marcador se conserva.
+    if (ok.corto) {
+      if (bjPartidaTerminada) nuevaPartidaBJ();
+      else nuevaRondaBJ();
+    }
+    else if (millis() - bjInicioResultado >= BJ_TIEMPO_RESULTADO) {
+      if (bjPartidaTerminada) nuevaPartidaBJ();
+      else nuevaRondaBJ();
+    }
   } else if (bjEstadoJuego == BJ_JUGADOR) {
     // Izquierda = pedir carta. Derecha = plantarse.
     if (izquierda.corto && bjCartasJugador < BJ_MAX_CARTAS_JUGADOR && bjPuntajeJugador() < 21) {
@@ -1460,7 +1500,7 @@ void setup() {
   tiempoStatsMascota = millis();
   ultimoCambioEstadistica = millis();
   iniciarMascota();
-  nuevaRondaBJ();
+  nuevaPartidaBJ();
   iniciarSnake();
 }
 

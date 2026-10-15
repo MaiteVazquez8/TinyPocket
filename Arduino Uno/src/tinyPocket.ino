@@ -282,7 +282,9 @@ int bjAnchoGrupo(int cantidad);
 void bjActualizarPosicionesCartas();
 void bjAgregarCarta(bool jugador, bool oculta);
 void bjRevelarCartaCasa();
+void nuevaPartidaBJ();
 void nuevaRondaBJ();
+void bjSumarResultado();
 void bjActualizarAnimaciones();
 void bjDibujarCorazon(int x, int y);
 void bjDibujarDiamante(int x, int y);
@@ -1152,12 +1154,34 @@ void bjRevelarCartaCasa() {
   for (int i = 0; i < bjCantidadCartas; i++)
     if (!bjCartas[i].jugador && bjCartas[i].oculta) { bjCartas[i].oculta = false; break; }
 }
+// Regla de partida: se gana al llegar a 3 victorias y se pierde al
+// llegar a 3 derrotas, igual que en la version del ATtiny85.
+const int BJ_META_VICTORIAS = 3;
+const int BJ_META_DERROTAS = 3;
+int bjVictorias = 0, bjDerrotas = 0;
+bool bjPartidaTerminada = false;
+
+// Empezar la PARTIDA: marcador a cero.
+void nuevaPartidaBJ() {
+  bjVictorias = 0; bjDerrotas = 0;
+  bjPartidaTerminada = false;
+  nuevaRondaBJ();
+}
+// Empezar una RONDA: cartas nuevas, pero se conserva el marcador.
 void nuevaRondaBJ() {
   bjCantidadCartas = 0; bjCartasJugador = 0; bjCartasCasa = 0;
   bjResultado = 0; bjEstadoJuego = BJ_REPARTO_INICIAL;
   bjPasoInicial = BJ_INICIO_JUGADOR_1;
   bjCrearMazo(); bjMezclarMazo();
   bjUltimaCarta = millis();
+}
+// Suma el resultado de la ronda al marcador y dice si la partida ended.
+void bjSumarResultado() {
+  if (bjResultado == BJ_RESULTADO_EMPATE) return;
+  if (bjResultado == BJ_RESULTADO_JUGADOR) bjVictorias++;
+  else bjDerrotas++;
+  if (bjVictorias >= BJ_META_VICTORIAS || bjDerrotas >= BJ_META_DERROTAS)
+    bjPartidaTerminada = true;
 }
 void bjActualizarAnimaciones() {
   for (int i = 0; i < bjCantidadCartas; i++) {
@@ -1271,6 +1295,7 @@ void bjActualizarJuego() {
   } else if (bjEstadoJuego == BJ_CASA) bjTurnoCasa();
   else if (bjEstadoJuego == BJ_ESPERANDO_RESULTADO) {
     if (millis() - bjInicioEsperaResultado >= BJ_TIEMPO_ANTES_RESULTADO) {
+      bjSumarResultado();   // suma esta ronda al marcador de la partida
       bjEstadoJuego = BJ_RESULTADO; bjInicioResultado = millis();
     }
   }
@@ -1293,7 +1318,9 @@ void bjDibujarResultado() {
   pantalla.clearBuffer();
   // Con la fuente de 6x10 en vez de 10x20: la de 10x20 son 2.8 KB de
   // flash que el Uno no puede gastar en un cartel.
-  if (bjResultado == BJ_RESULTADO_JUGADOR) {
+  if (bjPartidaTerminada) {
+    textoCentrado(bjVictorias > bjDerrotas ? F("Ganaste!") : F("Perdiste"), 28);
+  } else if (bjResultado == BJ_RESULTADO_JUGADOR) {
     textoCentrado(F("Ganaste!"), 30);
   } else if (bjResultado == BJ_RESULTADO_CASA) {
     textoCentrado(F("Gana"), 22);
@@ -1306,14 +1333,28 @@ void bjDibujarResultado() {
   dibujarNumero(36, 56, bjPuntajeCasaReal());
   dibujarTexto(84, 56, F("Vos "));
   dibujarNumero(114, 56, bjPuntajeJugador());
-  textoCentrado(F("OK otra | mant: menu"), 63);
+  // Marcador de la partida: victorias - derrotas.
+  dibujarTexto(2, 48, F("Ronda "));
+  dibujarNumero(52, 48, bjVictorias);
+  dibujarTexto(60, 48, F("-"));
+  dibujarNumero(66, 48, bjDerrotas);
+  textoCentrado(bjPartidaTerminada ? F("OK revancha | mant: menu")
+                                   : F("OK otra | mant: menu"), 63);
   pantalla.sendBuffer();
 }
 void procesarBlackjack() {
   if (ok.largo) { volverAlMenu(); return; }
   if (bjEstadoJuego == BJ_RESULTADO) {
-    if (ok.corto) nuevaRondaBJ();
-    else if (millis() - bjInicioResultado >= BJ_TIEMPO_RESULTADO) nuevaRondaBJ();
+    if (ok.corto) {
+      // Partida cerrada: revancha de verdad. Si sigue viva, solo se
+      // reparten cartas nuevas y el marcador se conserva.
+      if (bjPartidaTerminada) nuevaPartidaBJ();
+      else nuevaRondaBJ();
+    }
+    else if (millis() - bjInicioResultado >= BJ_TIEMPO_RESULTADO) {
+      if (bjPartidaTerminada) nuevaPartidaBJ();
+      else nuevaRondaBJ();
+    }
   } else if (bjEstadoJuego == BJ_JUGADOR) {
     // Izquierda = pedir carta. Derecha = plantarse.
     if (izquierda.corto && bjCartasJugador < BJ_MAX_CARTAS_JUGADOR && bjPuntajeJugador() < 21) {
@@ -1516,7 +1557,7 @@ void dibujarInformacion() {
   dibujarTexto(0, 25, F("Izq / Der: moverse"));
   dibujarTexto(0, 36, F("OK: elegir o actuar"));
   dibujarTexto(0, 47, F("Mantener OK: menu"));
-  pantalla.setFont(u8g2_font_4x6_tf); dibujarTexto(0, 62, F("tinyPocket - Mega"));
+  pantalla.setFont(u8g2_font_4x6_tf); dibujarTexto(0, 62, F("tinyPocket - Uno"));
   pantalla.sendBuffer();
 }
 
@@ -1536,7 +1577,7 @@ void setup() {
   tiempoStatsMascota = millis();
   ultimoCambioEstadistica = millis();
   iniciarMascota();
-  nuevaRondaBJ();
+  nuevaPartidaBJ();
   iniciarSnake();
 }
 

@@ -15,7 +15,7 @@
 //   INPUT_PULLUP: presionado = LOW
 //
 // POR QUE NO USA OLED EN ESTA PLACA:
-//   El ATtiny85 tiene 512 bytes de SRAM. El bUfer de 128x64 que
+//   El ATtiny85 tiene 512 bytes de SRAM. El buffer de 128x64 que
 //   necesitan U8g2 o Adafruit_SSD1306 ocupa por si solo 1024 bytes,
 //   o sea el doble de toda la memoria RAM del chip: no enlaza. Por eso
 //   esta version usa el LCD 16x2 de caracteres (16x2 = 32 celdas) con
@@ -27,8 +27,8 @@
 //
 // MEDIDAS DE MEMORIA (las da el compilador al compilar, con el core
 // ATTinyCore 1.5.2 y la placa "ATtiny25/45/85 (No bootloader)" a 8 MHz):
-//   Flash : 7968 bytes de 8192  (97%)
-//   SRAM  :  287 bytes de  512  (56%), con 225 de margen para la pila
+//   Flash : 5622 bytes de 8192  (69%)
+//   SRAM  :  267 bytes de  512  (52%), con 245 de margen para la pila
 //
 // REGLA DE ORO PARA ESTA PLACA:
 //   1. Todos los tipos y los prototipos van ANTES de la primera
@@ -42,6 +42,10 @@
 //      para que queden en flash y no ocupen RAM.
 //   4. Un solo buffer y una sola funcion de pintado para toda la
 //      aplicacion: dibujar es escribir en el buffer y enviarlo.
+//   5. Las marcas de tiempo son unsigned long. Con uint16_t, al pasar
+//      los 65535 ms (unos 65 s) el recorte hacia 16 bits hacia que
+//      "ahora - marca" diera un numero enorme y los juegos perdian
+//      el limite de fotogramas: se movian a toda velocidad.
 // ============================================================
 
 // Direccion I2C del modulo LCD. Cambiar a 0x3F si hace falta.
@@ -64,8 +68,8 @@ struct Boton {
   uint8_t pin;
   bool lecturaAnterior;
   bool estadoEstable;
-  uint16_t cambioLectura;
-  uint16_t inicioPulsacion;
+  unsigned long cambioLectura;
+  unsigned long inicioPulsacion;
   bool corto;
   bool largo;
 };
@@ -101,7 +105,6 @@ void borrarPantalla();
 void poner(uint8_t columna, uint8_t fila, char c);
 void ponerTexto(uint8_t fila, const char *texto);
 void ponerTextoF(uint8_t fila, const __FlashStringHelper *texto);
-void ponerFilaCentrada(uint8_t fila, const __FlashStringHelper *texto);
 void pintar();
 
 // Menu.
@@ -129,6 +132,7 @@ void dibujarMascota();
 void procesarMascota();
 
 // Blackjack.
+void nuevaPartidaBlackjack();
 void nuevaRondaBlackjack();
 void actualizarBlackjack();
 void dibujarBlackjack();
@@ -160,12 +164,12 @@ void actualizarBoton(Boton &boton) {
   unsigned long ahora = millis();
   if (lectura != boton.lecturaAnterior) {
     boton.lecturaAnterior = lectura;
-    boton.cambioLectura = (uint16_t)ahora;
+    boton.cambioLectura = ahora;
   }
   if (ahora - boton.cambioLectura >= 35 && lectura != boton.estadoEstable) {
     boton.estadoEstable = lectura;
     if (boton.estadoEstable == LOW) {
-      boton.inicioPulsacion = (uint16_t)ahora;
+      boton.inicioPulsacion = ahora;
     } else if (ahora - boton.inicioPulsacion >= 800) {
       boton.largo = true;
     } else {
@@ -237,16 +241,6 @@ void pintar() {
   lcd.setCursor(0, 1);
   lcd.print(buffer + 16);
 }
-// Centra un texto de flash de 16 columnas en la fila indicada.
-void ponerFilaCentrada(uint8_t fila, const __FlashStringHelper *texto) {
-  const char *p = (const char *)texto;
-  uint8_t i = 0;
-  while (i < 16 && pgm_read_byte(p + i) != 0) {
-    if (pgm_read_byte(p + i) != ' ') buffer[fila * 16 + i] = (char)pgm_read_byte(p + i);
-    i++;
-  }
-}
-
 // ============================================================
 // MENU
 // En 16x2 solo cabe un nombre por fila, asi que se muestra la
@@ -324,7 +318,7 @@ void procesarSubmenu() {
 int8_t ppPelotaX = 8, ppPelotaY = 0, ppVelX = 1, ppVelY = 1;
 int8_t ppPaletaJugador = 8, ppPaletaMaquina = 8;
 uint8_t ppPuntosJugador = 0, ppPuntosMaquina = 0;
-uint16_t ppUltimoPaso = 0;
+unsigned long ppUltimoPaso = 0;
 bool ppTerminado = false;
 
 void iniciarPingPong() {
@@ -388,9 +382,9 @@ void dibujarPingPong() {
     return;
   }
   poner((uint8_t)ppPaletaMaquina, 0, CH_PALETA);
-  poner((uint8_t)ppPaletaJugador, 1, CH_PALETA);
-  poner((uint8_t)ppPelotaX, (uint8_t)ppPelotaY, CH_PELOTA);
-  // Marcador: "Tus 2  Maq 1"
+  // Marcador: "Tus 2  Maq 1". Se escribe ANTES que la paleta y la
+  // pelota, porque en un LCD de 16x2 el texto y el juego comparten las
+  // dos filas: si se dibuja al final, taparia las dos.
   char marcador[17];
   uint8_t n = 0;
   marcador[n++] = 'T'; marcador[n++] = 'u'; marcador[n++] = 's'; marcador[n++] = ' ';
@@ -400,6 +394,9 @@ void dibujarPingPong() {
   marcador[n++] = (char)('0' + ppPuntosMaquina);
   marcador[n] = '\0';
   ponerTexto(1, marcador);
+  // La paleta y la pelota van encima del texto.
+  poner((uint8_t)ppPaletaJugador, 1, CH_PALETA);
+  poner((uint8_t)ppPelotaX, (uint8_t)ppPelotaY, CH_PELOTA);
   pintar();
 }
 void procesarPingPong() {
@@ -430,7 +427,7 @@ uint16_t boMuralla = 0xFFFF;
 int8_t boPelotaX = 8, boPelotaY = 1, boVelX = 1, boVelY = -1;
 int8_t boPaleta = 8;
 uint8_t boVidas = BO_VIDAS;
-uint16_t boUltimoPaso = 0;
+unsigned long boUltimoPaso = 0;
 bool boTerminado = false, boGanado = false;
 
 void iniciarBreakout() {
@@ -486,12 +483,14 @@ void dibujarBreakout() {
   }
   for (uint8_t i = 0; i < 16; i++)
     if (boMuralla & ((uint16_t)1 << i)) poner(i, 0, CH_LADRILLO);
-  poner((uint8_t)boPaleta, 1, CH_PALETA);
-  poner((uint8_t)boPelotaX, (uint8_t)boPelotaY, CH_PELOTA);
+  // Primero el contador de vidas, despues la paleta y la pelota encima:
+  // las dos filas del LCD las comparten las dos cosas.
   char vidas[17];
   vidas[0] = '<'; vidas[1] = ' '; vidas[2] = '>'; vidas[3] = ' ';
   vidas[4] = (char)('0' + boVidas); vidas[5] = '\0';
   ponerTexto(1, vidas);
+  poner((uint8_t)boPaleta, 1, CH_PALETA);
+  poner((uint8_t)boPelotaX, (uint8_t)boPelotaY, CH_PELOTA);
   pintar();
 }
 void procesarBreakout() {
@@ -521,7 +520,7 @@ void procesarBreakout() {
 #define MASCOTA_GANAR_MS 60000UL
 
 uint8_t maHambre = MASCOTA_MAXIMO, maFelicidad = MASCOTA_MAXIMO;
-uint16_t maUltimoTic = 0, maInicio = 0;
+unsigned long maUltimoTic = 0, maInicio = 0;
 uint8_t maFase = 0;
 bool maTerminada = false, maGanada = false;
 
@@ -557,7 +556,7 @@ void actualizarMascota() {
   if (maTerminada) return;
   unsigned long ahora = millis();
   if (ahora - maUltimoTic >= MASCOTA_TIC_MS) {
-    maUltimoTic = (uint16_t)ahora;
+    maUltimoTic = ahora;
     if (maHambre > 0) maHambre--;
     if (maFelicidad > 0) maFelicidad--;
     if (maHambre == 0 || maFelicidad == 0) maTerminada = true;
@@ -575,13 +574,13 @@ void dibujarMascota() {
     return;
   }
   dibujarCaraMascota();
-  // Fila de abajo: "Hambre 7  Fel 8" con barras de 3 caracteres.
+  // Fila de abajo: barra de hambre y barra de felicidad, de 3 bloques
   char fila[17];
   uint8_t n = 0;
   fila[n++] = 'H'; fila[n++] = ' ';
-  for (uint8_t i = 0; i < 3; i++) fila[n++] = (i < maHambre / 4) ? '#' : '-';
+  for (uint8_t i = 0; i < 3; i++) fila[n++] = (i * 3 < maHambre) ? '#' : '-';
   fila[n++] = ' '; fila[n++] = 'F'; fila[n++] = ' ';
-  for (uint8_t i = 0; i < 3; i++) fila[n++] = (i < maFelicidad / 4) ? '#' : '-';
+  for (uint8_t i = 0; i < 3; i++) fila[n++] = (i * 3 < maFelicidad) ? '#' : '-';
   fila[n] = '\0';
   ponerTexto(1, fila);
   pintar();
@@ -619,13 +618,13 @@ void procesarMascota() {
 uint8_t bjJugador[BJ_MAX_CARTAS], bjCasa[BJ_MAX_CARTAS];
 uint8_t bjCartasJugador = 0, bjCartasCasa = 0;
 uint8_t bjVictoria = 0, bjDerrota = 0;
-uint8_t bjPaso = 0;                 // 0 reparte, 1 juega el jugador, 2 juega la casa, 3 fin
+uint8_t bjPaso = 0;                 // 0 reparte, 1 juega el jugador, 2 juega la casa, 4 ronda cerrada
 uint8_t bjTotalJugador = 0, bjTotalCasa = 0;
 bool bjOculta = true;
-uint16_t bjUltimoPaso = 0;
+unsigned long bjUltimoPaso = 0;
 
 uint8_t bjValorCarta(uint8_t valor) { return valor == 1 ? 11 : valor; }
-uint8_t bjTotal(uint8_t *cartas, uint8_t cantidad, bool incluirOculta) {
+uint8_t bjTotal(uint8_t *cartas, uint8_t cantidad) {
   uint8_t suma = 0, ases = 0;
   for (uint8_t i = 0; i < cantidad; i++) {
     suma += bjValorCarta(cartas[i]);
@@ -634,10 +633,17 @@ uint8_t bjTotal(uint8_t *cartas, uint8_t cantidad, bool incluirOculta) {
   while (suma > 21 && ases > 0) { suma -= 10; ases--; }
   return suma;
 }
+// Empezar la PARTIDA: pone el marcador de victorias y derrotas a cero.
+void nuevaPartidaBlackjack() {
+  bjVictoria = 0; bjDerrota = 0;
+  nuevaPartidaBlackjack();
+}
+// Empezar una RONDA: nueva mano pero se conserva el marcador, que es
+// lo que hace que la meta de 3 victorias o 3 derrotas tenga sentido.
 void nuevaRondaBlackjack() {
   bjCartasJugador = 0; bjCartasCasa = 0;
-  bjVictoria = 0; bjDerrota = 0;
   bjPaso = 0; bjOculta = true;
+  bjTotalJugador = 0; bjTotalCasa = 0;
   bjUltimoPaso = millis();
 }
 void repartirCarta() {
@@ -648,29 +654,51 @@ void repartirCarta() {
   else if (!alJugador && bjCartasCasa < BJ_MAX_CARTAS) bjCasa[bjCartasCasa++] = valor;
   bjPaso++;
 }
+// El jugador se planta o se pasa: se resuelve la ronda.
 void terminarRondaBlackjack() {
+  uint8_t totalJugador = bjTotal(bjJugador, bjCartasJugador);
+  if (totalJugador > 21) {
+    bjDerrota++;
+    bjTotalJugador = totalJugador;
+    bjTotalCasa = bjTotal(bjCasa, bjCartasCasa);
+    bjOculta = false;
+    bjPaso = 4;                    // ronda perdida, sin turno de la banca
+    return;
+  }
   bjOculta = false;
-  uint8_t totalJugador = bjTotal(bjJugador, bjCartasJugador, true);
-  uint8_t totalCasa = bjTotal(bjCasa, bjCartasCasa, true);
+  bjPaso = 2;                      // ahora juega la banca
+  bjUltimoPaso = millis() - BJ_PASO_MS;   // pide carta en el proximo tick
+}
+// Turno de la banca: pide cartas hasta llegar a 17 o pasarse.
+void jugarCasa() {
+  uint8_t totalCasa = bjTotal(bjCasa, bjCartasCasa);
+  while (totalCasa < 17 && bjCartasCasa < BJ_MAX_CARTAS) {
+    bjCasa[bjCartasCasa++] = (uint8_t)random(1, 11);
+    totalCasa = bjTotal(bjCasa, bjCartasCasa);
+  }
+  uint8_t totalJugador = bjTotal(bjJugador, bjCartasJugador);
   bjTotalJugador = totalJugador;
   bjTotalCasa = totalCasa;
-  if (totalJugador > 21 || totalCasa > totalJugador) bjDerrota++;
-  else if (totalCasa < totalJugador || totalCasa > 21) bjVictoria++;
-  bjPaso = 3;
+  if (totalJugador > totalCasa) bjVictoria++;
+  else if (totalCasa > totalJugador) bjDerrota++;
+  bjPaso = 4;                      // ronda cerrada
 }
 void actualizarBlackjack() {
   if (millis() - bjUltimoPaso < BJ_PASO_MS) return;
   bjUltimoPaso = millis();
   if (bjPaso == 0) {
     repartirCarta();
-    if (bjPaso >= 4) { bjPaso = 1; bjTotalCasa = bjTotal(bjCasa, bjCartasCasa, false); }
+    if (bjPaso >= 4) { bjPaso = 1; bjTotalCasa = bjTotal(bjCasa, bjCartasCasa); }
+  } else if (bjPaso == 2) {
+    jugarCasa();
   }
 }
 void dibujarBlackjack() {
   borrarPantalla();
-  if (bjPaso == 3) {
+  if (bjPaso == 4) {
     if (bjVictoria >= BJ_META_VICTORIAS || bjDerrota >= BJ_META_DERROTAS) {
       ponerTextoF(0, bjVictoria > bjDerrota ? F(" Ganaste!      ") : F(" Perdiste      "));
+      ponerTextoF(1, F("OK revancha | mant:menu"));
     } else {
       char resultado[17];
       uint8_t n = 0;
@@ -685,8 +713,8 @@ void dibujarBlackjack() {
       else { resultado[n++] = 'E'; resultado[n++] = 'm'; }
       resultado[n] = '\0';
       for (uint8_t k = 0; k < n; k++) poner((uint8_t)((16 - n) / 2 + k), 0, resultado[k]);
+      ponerTextoF(1, F("OK otra | mant:menu"));
     }
-    ponerTextoF(1, F("OK otra | mant:menu"));
     pintar();
     return;
   }
@@ -712,26 +740,31 @@ void dibujarBlackjack() {
     fila[n++] = (char)('0' + bjValorCarta(bjJugador[i]) % 10);
   }
   while (n < 13) fila[n++] = ' ';
-  fila[n++] = (char)('0' + (bjTotal(bjJugador, bjCartasJugador, true) / 10) % 10);
-  fila[n++] = (char)('0' + bjTotal(bjJugador, bjCartasJugador, true) % 10);
+  uint8_t totalVisible = bjTotal(bjJugador, bjCartasJugador);
+  fila[n++] = (char)('0' + (totalVisible / 10) % 10);
+  fila[n++] = (char)('0' + totalVisible % 10);
   fila[n] = '\0';
   ponerTexto(1, fila);
   pintar();
 }
 void procesarBlackjack() {
   if (ok.largo) { volverAlMenu(); return; }
-  if (bjPaso == 3) {
-    if (ok.corto) nuevaRondaBlackjack();
+  if (bjPaso == 4) {
+    if (ok.corto) {
+      // Partida cerrada: revancha de verdad. Si la partida sigue viva,
+      // se conserva el marcador y solo se reparten cartas nuevas.
+      if (bjVictoria >= BJ_META_VICTORIAS || bjDerrota >= BJ_META_DERROTAS) nuevaPartidaBlackjack();
+      else nuevaRondaBlackjack();
+    }
     dibujarBlackjack();
     return;
   }
   if (bjPaso == 1) {
     // Izquierda = pedir carta, derecha = plantarse.
     if (izquierda.corto && bjCartasJugador < BJ_MAX_CARTAS) {
-      uint8_t valor = (uint8_t)random(1, 11);
-      bjJugador[bjCartasJugador++] = valor;
+      bjJugador[bjCartasJugador++] = (uint8_t)random(1, 11);
       bjUltimoPaso = millis();
-      if (bjTotal(bjJugador, bjCartasJugador, true) > 21) terminarRondaBlackjack();
+      if (bjTotal(bjJugador, bjCartasJugador) > 21) terminarRondaBlackjack();
     }
     if (derecha.corto) terminarRondaBlackjack();
   }
@@ -754,7 +787,7 @@ uint8_t snCuerpo[SN_MAX_SEGMENTOS];
 uint8_t snLongitud = 3;
 uint8_t snDireccion = 1;   // 0 arriba, 1 derecha, 2 abajo, 3 izquierda
 uint8_t snComida = 0;
-uint16_t snUltimoPaso = 0;
+unsigned long snUltimoPaso = 0;
 bool snTerminado = false, snPausa = false;
 
 uint8_t snCelda(uint8_t columna, uint8_t fila) { return (uint8_t)(fila * 16 + columna); }
@@ -853,10 +886,12 @@ void procesarSnake() {
 // INFORMACION
 // ============================================================
 
+// En un LCD de 16x2 las dos filas las ocupa el juego, asi que esta es
+// la UNICA pantalla donde cabe recordar los controles.
 void dibujarInformacion() {
   borrarPantalla();
   ponerTextoF(0, F(" TinyPocket   "));
-  ponerTextoF(1, F(" ATtiny85 16x2 "));
+  ponerTextoF(1, F("PB3< PB4> PB1OK"));
   pintar();
 }
 
@@ -880,7 +915,7 @@ void setup() {
   pintar();
   delay(600);
   iniciarMascota();
-  nuevaRondaBlackjack();
+  nuevaPartidaBlackjack();
   iniciarSnake();
   iniciarBreakout();
   iniciarPingPong();

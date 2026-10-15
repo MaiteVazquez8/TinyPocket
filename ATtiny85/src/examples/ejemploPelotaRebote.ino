@@ -6,7 +6,7 @@
 // TinyPocket - ejemplo de animacion: PELOTA REBOTANDO
 // Version ATtiny85.
 //
-// En el ATtiny85 no cabe un OLED de 128x64: su bUfer de 1024 bytes
+// En el ATtiny85 no cabe un OLED de 128x64: su buffer de 1024 bytes
 // no entra en los 512 bytes de RAM del chip. Este ejemplo muestra la
 // MISMA animacion (pelota que rebota en las cuatro paredes, con
 // estela y con el pixel extra al tocar) sobre el LCD de 16x2 que si

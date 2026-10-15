@@ -86,6 +86,7 @@ se cambiaron respecto a la versión Mega, todas por culpa de esas cifras:
 | 5 | Palos de las cartas con primitivas sencillas, sin triángulos rellenos | ~1 KB de flash |
 | 6 | 24 segmentos de serpiente en vez de 40, y 6 puntos de estela en vez de 8 | ~130 B de SRAM |
 | 7 | Sin `sqrt()` ni `sin()`: distancias comparadas al cuadrado y rebote triangular | ~0,5 KB de flash |
+| 8 | **Todos los textos literales con `F()`**, copiados a un buffer de 32 bytes al dibujar | **518 B de RAM** |
 
 ### La fuente única
 
@@ -110,6 +111,43 @@ texto de veinte líneas:
 ```cpp
 void dibujarNumero(int x, int y, int valor);
 ```
+
+### Los textos se quedan en FLASH (el ahorro más grande)
+
+En AVR **un literal escrito a pelo no vive en la flash**. El enlazador mete
+`.rodata` dentro de `.data`, es decir dentro de la RAM, y además lo copia al
+arrancar. Medido con `avr-size` sobre este mismo programa:
+
+| Sección del ELF | Bytes |
+| --- | --- |
+| `.data` (textos + búfer de U8g2) | 806 |
+| `.bss` (variables a cero) | 947 |
+| **Total de RAM** | **1753** |
+
+Los 60 textos del programa sumaban **692 bytes de RAM**, el 34 % de toda la
+memoria del Uno. La solución es pasarlos todos con `F()` (que los manda a
+PROGMEM) y copiarlos en el momento de dibujar:
+
+```cpp
+void dibujarTexto(int x, int y, const __FlashStringHelper *txt) {
+  const char *p = (const char *)txt;
+  uint8_t n = 0;
+  while (n < TEXTOS_MAX - 1 && pgm_read_byte(p + n) != 0) {
+    textoTemporal[n] = (char)pgm_read_byte(p + n);
+    n++;
+  }
+  textoTemporal[n] = '\0';
+  pantalla.drawStr(x, y, textoTemporal);
+}
+```
+
+Con un buffer temporal de 32 bytes en la pila. Lo mismo se hizo con las cuatro
+listas de textos (`LISTA_MENU`, `LISTA_MODOS`, `LISTA_ACCIONES`, `LISTA_STATS`),
+que antes eran arrays de punteros: con eso se recuperaron **518 bytes de RAM** y
+el programa incluso bajó de tamaño en flash.
+
+> Si alguna vez se cambia la placa por una con más RAM, esta técnica sigue
+> siendo buena: los textos en flash no consumen RAM en ninguna placa AVR.
 
 ## 6. Tipos y prototipos al principio del archivo
 
@@ -187,6 +225,12 @@ carta.carta.valor = (nuevaCarta % 13) + 1;
 * Los palos se dibujan con círculos, líneas y cajas: se pierde el relleno del
   triángulo, pero se distinguen los cuatro.
 * Se reparten cada 900 ms. Izquierda = pedir carta, derecha = plantarse.
+* La banca pide cartas hasta llegar a 17 y después se resuelve la ronda.
+* **La partida se gana al llegar a 3 victorias y se pierde al llegar a 3
+  derrotas**, igual que en el Mega y en el ATtiny85. El marcador de rondas se
+  ve en la pantalla de resultado; mientras la partida sigue viva, OK reparte
+  cartas nuevas conservando el marcador, y al cerrarse la partida OK arranca
+  una revancha que lo pone a cero.
 
 ## 13. Snake
 
@@ -220,7 +264,7 @@ arduino-cli compile -b arduino:avr:uno src
 
 | Programa | Flash | % | SRAM | % |
 | --- | --- | --- | --- | --- |
-| `src/tinyPocket.ino` | 30964 B | **96 %** | 1753 B | **86 %** |
+| `src/tinyPocket.ino` | 31218 B | **97 %** | 1240 B | **61 %** |
 | `src/examples/ejemploPelotaRebote.ino` | 13384 B | 41 % | 768 B | 38 % |
 | `src/examples/ejemploPingPong.ino` | 15216 B | 47 % | 767 B | 37 % |
 | `src/examples/ejemploBreakout.ino` | 17110 B | 53 % | 798 B | 39 % |
@@ -228,9 +272,10 @@ arduino-cli compile -b arduino:avr:uno src
 | `src/examples/ejemploBlackjack.ino` | 14918 B | 46 % | 898 B | 44 % |
 | `src/examples/ejemploOjosMascota.ino` | 13192 B | 41 % | 666 B | 33 % |
 
-**El programa principal está al 96 % de la flash y al 86 % de la RAM.** Es el
-punto apretado del proyecto: quedan unos 1,2 KB de flash y 295 bytes de RAM
-libres. Si hay que añadir algo nuevo, lo primero que hay que mirar es la tabla
+**El programa principal está al 97 % de la flash y al 61 % de la RAM.** La
+RAM se dejó en un 86 % al principio de la revisión y se bajó a este 61 %
+sacando los textos a flash; en flash, en cambio, sigue justo: quedan unos
+1 KB. Si hay que añadir algo nuevo, lo primero que hay que mirar es la tabla
 de fuentes.
 
 ## 17. Diferencias con las otras dos versiones
@@ -239,14 +284,14 @@ de fuentes.
 | --- | --- | --- | --- |
 | Pantalla | OLED 128×64, búfer completo | OLED 128×64, búfer de 1 página | **LCD 16×2** |
 | I2C | D20 / D21 | **A4 / A5** | PB0 / PB2 |
-| Flash del programa | 41816 B (16 %) | 30964 B (96 %) | 7968 B (97 %) |
-| SRAM del programa | 3169 B (39 %) | 1753 B (86 %) | 287 B (56 %) |
+| Flash del programa | 42112 B (17 %) | 31218 B (97 %) | 5622 B (69 %) |
+| SRAM del programa | 3220 B (39 %) | 1240 B (61 %) | 267 B (52 %) |
 | Fuentes | 3 | 1 (4×6) | 1 (caracteres) |
 | Interfaz | Títulos grandes | Títulos "en negrita" con una fuente | Una opción por fila |
 
 ## 18. Limitaciones conocidas
 
-* **La flash está casi llena (96 %).** No hay sitio para un juego nuevo sin
+* **La flash está casi llena (97 %).** No hay sitio para un juego nuevo sin
   quitar algo: el primer candidato a irse sería el Breakout, que es el bloque
   más grande del programa.
 * **Solo una fuente de texto.** Todos los rótulos son pequeños; el precio de la

@@ -185,7 +185,12 @@ cartas[i].x += (cartas[i].destinoX - cartas[i].x) * 0.18;
   triángulo de contorno, `llenarTriangulo()` rellena el triángulo a mano
   recorriendo filas.
 * Se reparten cada 900 ms. Izquierda = pedir carta, derecha = plantarse.
-* Gana quien más se acerque a 21 sin pasarse.
+* La banca pide cartas hasta llegar a 17 y después se resuelve la ronda.
+* **La partida se gana al llegar a 3 victorias y se pierde al llegar a 3
+  derrotas.** El marcador de rondas se ve en la pantalla de resultado; mientras
+  la partida sigue viva, OK reparte cartas nuevas conservando el marcador, y al
+  cerrarse la partida OK arranca una revancha que lo pone a cero. Es la misma
+  regla que en el ATtiny85 y en el Uno.
 
 ## 13. Snake
 
@@ -231,7 +236,7 @@ arduino-cli compile -b arduino:avr:mega src
 
 | Programa | Flash | % | SRAM | % |
 | --- | --- | --- | --- | --- |
-| `src/tinyPocket.ino` | 41816 B | 16 % | 3169 B | 39 % |
+| `src/tinyPocket.ino` | 42112 B | 17 % | 3220 B | 39 % |
 | `src/examples/ejemploPelotaRebote.ino` | 14116 B | 6 % | 1664 B | 20 % |
 | `src/examples/ejemploPingPong.ino` | 15952 B | 6 % | 1663 B | 20 % |
 | `src/examples/ejemploBreakout.ino` | 17840 B | 7 % | 1694 B | 21 % |
@@ -244,7 +249,7 @@ arduino-cli compile -b arduino:avr:mega src
 | | Mega 2560 | Arduino Uno | ATtiny85 |
 | --- | --- | --- | --- |
 | Pantalla | OLED 128×64, búfer completo | OLED 128×64, búfer de 1 página | **LCD 16×2** |
-| SRAM usada | 3169 B | 1753 B | 287 B |
+| SRAM usada | 3220 B | 1240 B | 267 B |
 | Fuentes | 3 | **1** (4×6) | 1 (caracteres) |
 | Mazo del blackjack | 52 cartas, 2 bytes/carta | 52 cartas, 1 byte/carta | cartas de 1 a 10 |
 | Serpiente | 40 segmentos, float | 24 segmentos, `int16_t` | 32 celdas, 1 byte/celda |
