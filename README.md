@@ -1,280 +1,166 @@
 # TinyPocket
 
-TinyPocket es una mini consola portátil desarrollada con un **ATtiny85**, una pantalla **LCD 16×2 con comunicación I²C** y tres botones.
+TinyPocket es una mini consola portátil con **menú, cinco minijuegos, una
+mascota virtual y tres botones**. El proyecto mantiene **tres versiones**,
+una por microcontrolador, cada una adaptada a los recursos reales de su placa.
 
-El proyecto reúne diferentes minijuegos y una mascota virtual en un dispositivo de pequeño tamaño y bajo consumo, utilizando los recursos limitados del ATtiny85.
+## Las tres versiones
 
-## Simulación en Tinkered
+Cada carpeta del proyecto corresponde a un microcontrolador distinto, según el
+nombre de la carpeta. **No son tres copias del mismo código**: son tres
+adaptaciones, con pantalla, pines, memoria y animaciones distintas.
 
-Podés acceder al proyecto y consultar la simulación desde el siguiente enlace:
+| Carpeta | Microcontrolador | Pantalla | I2C | Botones |
+| --- | --- | --- | --- | --- |
+| `Mega 2560/` | ATmega2560 (256 KB flash, 8 KB SRAM) | OLED 128×64, búfer completo | D20 / D21 | D2 / D3 / D4 |
+| `Arduino Uno/` | ATmega328P (32 KB flash, 2 KB SRAM) | OLED 128×64, búfer de 1 página | A4 / A5 | D2 / D3 / D4 |
+| `ATtiny85/` | ATtiny85 (8 KB flash, **512 B SRAM**) | **LCD 16×2** de caracteres | PB0 / PB2 | PB3 / PB4 / PB1 |
 
-**[Abrir TinyPocket en Tinkered](https://app.tinkered.ai/p/172675c8-5722-4fdb-a319-6ffd4de13691)**
+### Código final de TinyPocket
 
-## Objetivo
+Uno en cada carpeta, en `src/tinyPocket.ino`. Los tres tienen las mismas seis
+funciones:
 
-El objetivo de TinyPocket es desarrollar un dispositivo electrónico que combine programación embebida y electrónica mediante un sistema sencillo e interactivo.
+| Menú | Función |
+| --- | --- |
+| Ping Pong | Pelota, paleta y rebote en las cuatro paredes |
+| Breakout | Ladrillos, colisiones en cuatro direcciones y vidas |
+| Mascota | Estadísticas, cuatro acciones y cara animada |
+| Blackjack | Mazo, reparto y resultado |
+| Snake | Controlado por el jugador |
+| Info | Pantalla de información |
 
-El proyecto permite trabajar con:
+### Ejemplos de animación
 
-- Microcontroladores.
-- Programación en C/C++.
-- Comunicación I²C.
-- Pantallas LCD.
-- Lectura de botones.
-- Antirrebote de pulsadores.
-- Máquinas de estados.
-- Temporizadores mediante `millis()`.
-- Generación de números aleatorios.
-- Desarrollo de minijuegos.
+Seis ejemplos independientes en `src/examples/` de cada carpeta, pensados para
+ver una animación sola, sin botones y sin bloquear el programa:
 
-## Modos de juego
+| Ejemplo | Qué muestra |
+| --- | --- |
+| `ejemploPelotaRebote.ino` | Pelota rebotando, con estela y latido en el impacto |
+| `ejemploPingPong.ino` | Rebote, estela y ángulo de salida según dónde golpea |
+| `ejemploBreakout.ino` | Colisión con ladrillos desde las cuatro direcciones |
+| `ejemploSnake.ino` | Movimiento suave, cabeza con ojos y comida que late (**con IA**) |
+| `ejemploBlackjack.ino` | Reparto de cartas volando desde los laterales |
+| `ejemploOjosMascota.ino` | Las 37 fases de la cara de la mascota |
 
-### Ping Pong
+> `ejemploSnake.ino` lleva IA a propósito: su función es ver la animación. El
+> Snake jugable, sin IA y sin giros de 180°, está en `tinyPocket.ino`.
 
-Minijuego en el que el jugador debe devolver una pelota utilizando una paleta.
+## Por qué el ATtiny85 no usa OLED
 
-Controles:
+El búfer de un OLED de 128×64 ocupa **1024 bytes**, y el ATtiny85 tiene
+**512 bytes de SRAM en total**: no cabe ni de lejos. Se comprobó compilando y
+el programa no enlaza. Por eso esa versión usa el **LCD 16×2 de caracteres**, que
+no necesita búfer, y representa las animaciones con caracteres especiales
+(`createChar`). Es, además, la versión más portable: 8 KB de flash, 512 B de RAM y
+5 V.
 
-- **LEFT:** mover la paleta hacia arriba.
-- **RIGHT:** mover la paleta hacia abajo.
-- **OK:** volver al menú.
+## Memoria de los códigos finales
 
-El jugador gana cuando consigue **5 puntos**.
+Números reales dados por el compilador:
 
-### Mascota
+| Versión | Flash | % | SRAM | % |
+| --- | --- | --- | --- | --- |
+| Mega 2560 | 41816 B | 16 % | 3169 B | 39 % |
+| Arduino Uno | 30964 B | **96 %** | 1753 B | **86 %** |
+| ATtiny85 | 7968 B | **97 %** | 287 B | 56 % |
 
-Una mascota virtual cuenta con dos estadísticas:
+El Mega va sobrado; el Uno y el ATtiny85 justos. Antes de añadir una función
+nueva hay que mirar estas dos filas.
 
-- Hambre.
-- Felicidad.
+## Cómo compilar
 
-Ambas estadísticas disminuyen con el tiempo y el jugador debe mantenerlas utilizando los botones.
+```bash
+# Mega 2560
+arduino-cli compile -b arduino:avr:mega "Mega 2560/src"
 
-Controles:
+# Arduino Uno
+arduino-cli compile -b arduino:avr:uno "Arduino Uno/src"
 
-- **LEFT:** alimentar.
-- **RIGHT:** jugar.
-- **OK:** volver al menú.
-
-La partida termina si alguna estadística llega a `0`.
-
-La mascota gana si consigue sobrevivir durante el tiempo establecido.
-
-### Blackjack
-
-Versión simplificada del juego Blackjack.
-
-Controles:
-
-- **LEFT:** pedir otra carta (`Hit`).
-- **RIGHT:** plantarse (`Stand`).
-- **OK:** continuar la ronda o volver al menú.
-
-El jugador gana la partida al conseguir **3 victorias** y pierde al alcanzar **3 derrotas**.
-
-### Snake
-
-Versión de Snake adaptada a las dimensiones de una pantalla LCD 16×2.
-
-El tablero utiliza:
-
-- 16 columnas.
-- 2 filas.
-- 32 posiciones disponibles.
-
-Controles:
-
-- **LEFT:** girar hacia la izquierda.
-- **RIGHT:** girar hacia la derecha.
-- **OK:** volver al menú.
-
-La serpiente aumenta de tamaño al comer la comida y su velocidad aumenta progresivamente.
-
-## Componentes
-
-| Componente | Cantidad |
-|---|---:|
-| ATtiny85 | 1 |
-| LCD 16×2 con módulo I²C | 1 |
-| Pulsadores | 3 |
-| Switch | 1 |
-| Fuente de alimentación/batería | 1 |
-| Cables | Según necesidad |
-
-> **Importante:** verificar la tensión de funcionamiento de la LCD y del módulo I²C antes de realizar la conexión. Muchos módulos LCD 16×2 están diseñados para trabajar a 5 V.
-
-## Conexiones
-
-### ATtiny85 y LCD I²C
-
-| ATtiny85 | LCD I²C |
-|---|---|
-| PB0 | SDA |
-| PB2 | SCL |
-| VCC | VCC |
-| GND | GND |
-
-### ATtiny85 y botones
-
-| Botón | Pin del ATtiny85 |
-|---|---|
-| LEFT | PB3 |
-| RIGHT | PB4 |
-| OK | PB1 |
-
-Cada botón se conecta entre su pin correspondiente y **GND**.
-
-El programa utiliza `INPUT_PULLUP`, por lo que el estado de los botones es:
-
-- Sin pulsar: `HIGH`.
-- Pulsado: `LOW`.
-
-El switch funciona como interruptor general de alimentación.
-
-## Diagrama del circuito
-
-El diagrama completo de conexiones se encuentra en:
-
-`Img/circuitoDiagrama.png`
-
-También se incluyen imágenes de la simulación dentro de:
-
-`Img/Simulacion/`
-
-## Pantalla LCD
-
-TinyPocket utiliza una pantalla LCD 16×2 conectada mediante I²C.
-
-La dirección I²C depende del módulo utilizado. Una dirección común es:
-
-```cpp
-#define LCD_ADDRESS 0x27
+# ATtiny85 (core ATTinyCore de Spence Konde, 8 MHz interno)
+arduino-cli compile -b "ATTinyCore:avr:attinyx5:chip=85" "ATtiny85/src"
 ```
 
-Algunos módulos utilizan:
+Para compilar un ejemplo concreto hay que abrir **solo ese `.ino`**: en Arduino
+IDE, *Archivo → Abrir* (o *Sketchbook* en arduino-cli), porque un sketch solo
+puede tener un `.ino` principal.
 
-```cpp
-#define LCD_ADDRESS 0x3F
-```
+### Librerías necesarias
 
-Si la pantalla no funciona, se debe comprobar la dirección I²C del módulo y modificarla en el código.
+| Librería | Para qué |
+| --- | --- |
+| **U8g2** (2.36.19) | OLED 128×64 en el Mega y el Uno |
+| **LiquidCrystal_I2C** (1.1.2) | LCD 16×2 en el ATtiny85 |
 
-## Funcionamiento
-
-Al encender TinyPocket se inicializa el ATtiny85, la comunicación I²C, la pantalla y los botones.
-
-Luego se muestra el menú principal, desde donde se puede seleccionar uno de los cuatro modos:
-
-- Ping Pong.
-- Mascota.
-- Blackjack.
-- Snake.
-
-LEFT y RIGHT permiten desplazarse por las opciones y OK permite seleccionar el modo.
-
-Cuando termina una partida, el usuario puede volver al menú y seleccionar otro modo.
-
-## Software
-
-El proyecto está desarrollado utilizando:
-
-- **Arduino IDE**
-- **C/C++**
-- **ATtiny85**
-- **Wire**
-- **LiquidCrystal_I2C**
-
-## Cargar el programa
-
-Para programar el ATtiny85:
-
-1. Instalar Arduino IDE.
-2. Instalar un core compatible con ATtiny85.
-3. Seleccionar el ATtiny85 como placa.
-4. Instalar las librerías necesarias.
-5. Abrir `src/tinyPocket.ino`.
-6. Comprobar los pines definidos en el código.
-7. Comprobar la dirección I²C de la pantalla.
-8. Seleccionar el programador utilizado.
-9. Compilar el programa.
-10. Cargarlo en el ATtiny85.
+Núcleo: `arduino:avr` para el Mega y el Uno; `ATTinyCore:avr` para el ATtiny85.
 
 ## Controles
 
-| Modo | LEFT | RIGHT | OK |
-|---|---|---|---|
-| Menú | Anterior | Siguiente | Entrar |
-| Ping Pong | Arriba | Abajo | Menú |
-| Mascota | Alimentar | Jugar | Menú |
-| Blackjack | Hit | Stand | Continuar / Menú |
-| Snake | Girar izquierda | Girar derecha | Menú |
+| Modo | Izquierda | Derecha | OK corto | Mantener OK |
+| --- | --- | --- | --- | --- |
+| Menú | Anterior | Siguiente | Entrar | — |
+| Submenú | Cambiar | Cambiar | Entrar | Volver al menú |
+| Ping Pong | Mover paleta izq. | Mover paleta der. | — | Volver al menú |
+| Breakout | Mover paleta izq. | Mover paleta der. | Reiniciar al acabar | Volver al menú |
+| Mascota | Comer | Jugar | Actuar | Volver al menú |
+| Blackjack | Pedir carta | Plantarse | Otra ronda | Volver al menú |
+| Snake | Girar a la izquierda | Girar a la derecha | Pausa / reiniciar | Volver al menú |
+
+Todos los botones usan las resistencias *pull-up* internas: **sin pulsar = HIGH,
+pulsado = LOW**, y cada botón va entre su pin y GND.
 
 ## Estructura del repositorio
 
 ```text
 TinyPocket/
-│
 ├── README.md
 │
-├── Docs/
+├── Mega 2560/
+│   ├── img/circuitoDiagrama.png
+│   ├── img/Simulacion/
+│   └── src/
+│       ├── tinyPocket.ino          <- código final
+│       ├── explicacion_codigo.md   <- cómo funciona
+│       └── examples/               <- 6 ejemplos de animación
 │
-├── Img/
-│   ├── circuitoDiagrama.png
-│   └── Simulacion/
-│       ├── circuitoSimulado.png
-│       └── circuitoSimulado2.png
+├── Arduino Uno/                     <- misma estructura
+│   ├── Img/
+│   └── src/
+│       ├── tinyPocket.ino
+│       ├── explicacion_codigo.md
+│       └── examples/
 │
-└── src/
+└── ATtiny85/
     ├── explicacion_codigo.md
-    └── tinyPocket.ino
+    └── src/
+        ├── tinyPocket.ino
+        └── examples/
 ```
 
-### `Docs/`
+## Documentación
 
-Contiene documentación adicional relacionada con el proyecto.
+Cada versión tiene su propio `explicacion_codigo.md` con el detalle de sus
+adaptaciones:
 
-Puede utilizarse para almacenar información técnica, investigaciones, especificaciones o documentación del desarrollo.
+* `Mega 2560/src/explicacion_codigo.md`
+* `Arduino Uno/src/explicacion_codigo.md`
+* `ATtiny85/explicacion_codigo.md`
 
-### `Img/`
+## Reglas de mantenimiento
 
-Contiene las imágenes utilizadas para documentar el proyecto.
-
-`circuitoDiagrama.png` muestra el circuito y sus conexiones.
-
-La carpeta `Simulacion` contiene imágenes del circuito simulado.
-
-### `src/`
-
-Contiene el código fuente y la documentación específica del programa.
-
-#### `tinyPocket.ino`
-
-Es el programa principal de TinyPocket.
-
-Contiene la implementación de:
-
-- Menú.
-- Botones.
-- Pantalla LCD.
-- Ping Pong.
-- Mascota.
-- Blackjack.
-- Snake.
-- Estados de la aplicación.
-- Temporizadores.
-- Generación aleatoria.
-- Lógica de los juegos.
-
-#### `explicacion_codigo.md`
-
-Contiene una explicación de las diferentes partes de `tinyPocket.ino`, incluyendo la inicialización, botones, menú y funcionamiento de cada modo.
-
-## Documentación del código
-
-Para conocer cómo está organizado y cómo funciona el código, consultá:
-
-`src/explicacion_codigo.md`
+1. **Tipos y prototipos antes de la primera función.** El Arduino IDE inserta
+   los prototipos que genera justo después de los `#include`. Si un `enum` o un
+   `struct` aparece más abajo, genera declaraciones rotas y la compilación falla
+   con `'X' was not declared in this scope`. Ya ha pasado en este proyecto.
+2. **Ningún `delay()` en el bucle.** Las animaciones van con `millis()`; los
+   `delay()` solo en `setup()`.
+3. **Los ejemplos no dependen del código final.** Cada uno se compila por
+   separado.
+4. **Medir la memoria después de cada cambio**, sobre todo en el Uno y el
+   ATtiny85, que van al 96 % y al 97 % de su flash.
 
 ## TinyPocket
 
-**Mini consola portátil basada en ATtiny85.**
+**Mini consola portátil.** Una versión para Arduino Mega 2560, otra para Arduino
+Uno y otra para ATtiny85, con las mismas funciones adaptadas a cada placa.

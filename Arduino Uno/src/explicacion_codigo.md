@@ -1,751 +1,263 @@
-# Explicación del código de TinyPocket
+# Explicación del código de TinyPocket — Arduino Uno
 
-Este documento explica cómo está organizado `tinyPocket.ino` y cuál es la función de cada una de sus partes.
+Este documento explica cómo está organizado `src/tinyPocket.ino` en la versión
+para **Arduino Uno** del proyecto TinyPocket.
 
-El programa está desarrollado en **C/C++ para Arduino** y está diseñado para ejecutarse en un **ATtiny85** conectado a una pantalla LCD 16×2 mediante I²C y tres botones.
+El microcontrolador es el **ATmega328P** (8 bits, **32 KB de flash y 2 KB de
+SRAM**), conectado a un **OLED de 128×64 por I²C** y tres botones.
+
+Esta versión tiene **las mismas seis funciones** que la del Mega (menú, Ping
+Pong, Breakout, Mascota, Blackjack, Snake e Información) y los mismos botones,
+pero reescrita para que quepa en 2 KB de RAM y 32 KB de flash.
 
 ## 1. Librerías
 
-El programa utiliza las librerías necesarias para controlar el microcontrolador, la comunicación I²C y la pantalla:
-
 ```cpp
 #include <Arduino.h>
-#include <Wire.h>
-#include <LiquidCrystal_I2C.h>
+#include <U8g2lib.h>
+#include <math.h>
 ```
 
-### `Arduino.h`
+Las mismas que en la versión Mega: **U8g2** para el OLED y `math.h` para las
+interpolaciones.
 
-Proporciona las funciones principales utilizadas por Arduino, como:
-
-* `pinMode()`
-* `digitalRead()`
-* `digitalWrite()`
-* `millis()`
-* `random()`
-
-### `Wire.h`
-
-Permite utilizar el protocolo de comunicación **I²C**.
-
-Se utiliza para comunicarse con la pantalla LCD.
-
-### `LiquidCrystal_I2C.h`
-
-Permite controlar la pantalla LCD 16×2 utilizando el módulo I²C.
-
-## 2. Configuración de la pantalla
-
-Se define la dirección I²C y las dimensiones de la pantalla:
+## 2. Configuración de la pantalla: aquí está la diferencia clave
 
 ```cpp
-#define LCD_ADDRESS 0x27
-#define LCD_COLS 16
-#define LCD_ROWS 2
+U8G2_SH1106_128X64_NONAME_1_HW_I2C pantalla(U8G2_R0, U8X8_PIN_NONE);
+// Si tu OLED es SSD1306:
+// U8G2_SSD1306_128X64_NONAME_1_HW_I2C pantalla(U8G2_R0, U8X8_PIN_NONE);
 ```
 
-Después se crea el objeto que representa la pantalla:
+El sufijo **`_1_`** es lo que hace posible que este programa exista en un Uno:
+es el **búfer de una sola página**, de **128 bytes**, en lugar del búfer completo
+(`_F_`) de **1024 bytes** que usa el Mega.
+
+Se comprobó con el compilador: con el búfer completo, este mismo programa
+**ocupaba 3169 bytes de SRAM y no entraba en los 2048 del ATmega328P**. Con el
+búfer de una página se queda en **1753 bytes**.
+
+U8g2 se encarga de volcar la pantalla por páginas, así que **el código de dibujo
+no cambia ni una línea**: los dos programas usan `clearBuffer()`, `setFont()`,
+`drawDisc()`, `sendBuffer()`… exactamente igual.
+
+> Si algún día se cambia la placa por una con más RAM, se puede volver a `_F_`
+> sin tocar nada más.
+
+## 3. Conexiones
+
+Según `Img/circuitoDiagrama.png`:
+
+| Señal | Pin del Uno |
+| --- | --- |
+| OLED SDA | **A4** |
+| OLED SCL | **A5** |
+| Botón izquierda | D2 |
+| Botón derecha | D3 |
+| Botón OK | D4 |
+| Alimentación | switch + batería al pin BAT-5V |
+
+A4 y A5 son los pines I²C de hardware del ATmega328P, por eso la variante
+`_HW_I2C` funciona sin indicar SDA ni SCL. **Ojo**: A4 y A5 son pines
+analógicos, pero solo se usan como I²C, así que no estorban.
+
+Los botones usan `INPUT_PULLUP` (sin pulsar = `HIGH`, pulsado = `LOW`), igual que
+en las otras dos versiones.
+
+## 4. Antirrebote de botones
+
+Idéntico al del Mega: una función para los tres botones, estado estable tras
+**25 ms** y dos eventos al soltar.
+
+* **corto** → `corto = true`
+* **800 ms o más** → `largo = true`, que es el comando de volver al menú
+
+## 5. Adaptaciones de memoria, y por qué
+
+El ATmega328P tiene 2 KB de RAM y 32 KB de flash. Estas son las seis cosas que
+se cambiaron respecto a la versión Mega, todas por culpa de esas cifras:
+
+| # | Adaptación | Ahorro |
+| --- | --- | --- |
+| 1 | Búfer de una página (`_1_`) en vez de completo (`_F_`) | 896 B de SRAM |
+| 2 | Una sola fuente, la pequeña 4×6 | ~2,1 KB de flash |
+| 3 | Mazo del blackjack con **1 byte por carta** (0..51) en vez de una estructura de 2 bytes | 52 B de SRAM |
+| 4 | Coordenadas de la serpiente y de las cartas animadas como `int16_t` en vez de `float` | ~160 B de SRAM |
+| 5 | Palos de las cartas con primitivas sencillas, sin triángulos rellenos | ~1 KB de flash |
+| 6 | 24 segmentos de serpiente en vez de 40, y 6 puntos de estela en vez de 8 | ~130 B de SRAM |
+| 7 | Sin `sqrt()` ni `sin()`: distancias comparadas al cuadrado y rebote triangular | ~0,5 KB de flash |
+
+### La fuente única
+
+Medido con el compilador: **añadir una segunda fuente cuesta unos 2 KB**, el 6 %
+del programa entero. Por eso el Uno usa solo la 4×6 y para que los títulos no se
+vean débiles se dibujan **dos veces desplazados un píxel**, que produce un
+efecto de negrita por dos bytes de código:
 
 ```cpp
-LiquidCrystal_I2C lcd(
-  LCD_ADDRESS,
-  LCD_COLS,
-  LCD_ROWS
-);
+void dibujarTitulo(const char *titulo, int y) {
+  pantalla.setFont(u8g2_font_4x6_tf);
+  pantalla.drawStr(0, y, titulo);
+  pantalla.drawStr(1, y, titulo);
+}
 ```
 
-La dirección `0x27` es una de las más utilizadas por los módulos I²C.
+### Sin `sprintf()` ni `print()`
 
-Si el módulo utiliza `0x3F`, se debe modificar:
+Entre los dos se llevan más de 2 KB de flash. En su lugar hay un conversor a
+texto de veinte líneas:
 
 ```cpp
-#define LCD_ADDRESS 0x27
+void dibujarNumero(int x, int y, int valor);
 ```
 
-por:
+## 6. Tipos y prototipos al principio del archivo
 
-```cpp
-#define LCD_ADDRESS 0x3F
-```
-
-## 3. Pines
-
-Los tres botones están conectados a diferentes pines del ATtiny85:
-
-```cpp
-#define PIN_BTN_LEFT  PB3
-#define PIN_BTN_RIGHT PB4
-#define PIN_BTN_OK    PB1
-```
-
-La distribución es:
-
-| Pin | Función |
-| --- | ------- |
-| PB3 | LEFT    |
-| PB4 | RIGHT   |
-| PB1 | OK      |
-| PB0 | SDA     |
-| PB2 | SCL     |
-
-## 4. Configuración de los botones
-
-Los botones utilizan las resistencias internas *pull-up* del ATtiny85:
-
-```cpp
-pinMode(PIN_BTN_LEFT, INPUT_PULLUP);
-pinMode(PIN_BTN_RIGHT, INPUT_PULLUP);
-pinMode(PIN_BTN_OK, INPUT_PULLUP);
-```
-
-Esto significa que el estado eléctrico del botón es:
-
-```text
-Sin pulsar → HIGH
-Pulsado    → LOW
-```
-
-Los botones se conectan entre el pin correspondiente y GND.
-
-## 5. Antirrebote
-
-Los pulsadores mecánicos pueden generar pequeñas variaciones eléctricas al ser presionados. Este fenómeno se conoce como **rebote** o *bounce*.
-
-Para evitar que una sola pulsación sea interpretada como varias, el programa implementa un sistema de *debounce*.
-
-La información de cada botón se almacena en una estructura:
-
-```cpp
-struct Button {
-  uint8_t pin;
-  bool stableState;
-  bool lastRead;
-  uint32_t lastChange;
-  bool pressed;
-};
-```
-
-La estructura almacena:
-
-* El pin del botón.
-* El último estado estable.
-* La última lectura.
-* El momento del último cambio.
-* Si existe una pulsación pendiente.
-
-El tiempo de antirrebote se establece mediante:
-
-```cpp
-#define DEBOUNCE_MS 35UL
-```
-
-La función encargada de actualizar el estado es:
-
-```cpp
-updateButton()
-```
-
-Esta función comprueba que el estado permanezca estable durante el tiempo establecido antes de considerar válida una pulsación.
-
-## 6. Eventos de pulsación
-
-La función:
-
-```cpp
-consumePressed()
-```
-
-permite comprobar si un botón fue presionado.
-
-Cuando detecta una pulsación, devuelve `true` y elimina el evento para que esa misma pulsación no vuelva a procesarse.
-
-Esto permite utilizar los botones como eventos individuales en lugar de leerlos constantemente.
+Todos los `struct` y `enum`, y el bloque de prototipos, están **antes de la
+primera función**. El Arduino IDE inserta los prototipos que genera justo
+después de los `#include`; si un `enum` aparece más abajo genera declaraciones
+rotas y la compilación falla con `'FaseMascota' was not declared in this scope`.
+Ese error ya ocurrió en este proyecto al mover las animaciones.
 
 ## 7. Estados de la aplicación
 
-TinyPocket utiliza una máquina de estados para determinar qué parte del programa debe ejecutarse.
+```cpp
+enum Estado { MENU, SUBMENU_PINGPONG, JUEGO_PINGPONG, JUEGO_BREAKOUT,
+              JUEGO_MASCOTA, JUEGO_BLACKJACK, JUEGO_SNAKE, INFORMACION };
+```
 
-Los estados principales son:
+Los mismos ocho estados que en el Mega, y el mismo `switch` en `loop()`.
+
+## 8. Menú
+
+Igual que en el Mega: marcador animado con interpolación suave y opción
+seleccionada en negro sobre el recuadro. Con la fuente pequeña, los títulos usan
+el doble dibujo en negrita.
+
+## 9. Ping Pong
+
+La misma física y el mismo aspecto que en el Mega, con el campo reducido para
+dejar sitio al marcador y a la línea de controles:
+
+* Paleta abajo (y=52), 24 px de ancho.
+* Pelota de radio 2 que **crece a 3 px durante el rebote**.
+* **Estela de 6 puntos** decrecientes.
+* El ángulo de salida depende de dónde golpea, con mínimo de 0,35 para que la
+  pelota no se quede pegada moviéndose en vertical.
+
+## 10. Breakout
+
+Los mismos bloques de **11×4 px** (8 columnas × 4 filas) que en el Mega. La
+colisión se resuelve por la posición de la pelota en el fotograma anterior y, si
+entra por una esquina, por la distancia mínima a cada cara.
+
+Cada ladrillo roto acelera la pelota un 1,5 %, con tope en 2,8. Hay **3 vidas**.
+
+## 11. Mascota
+
+Las mismas **37 fases** que en el Mega y el Mega es quien las referencia, pero
+las duraciones están en una **tabla en PROGMEM** en vez de un `switch` de 37
+casos:
 
 ```cpp
-enum AppState : uint8_t {
-  STATE_MENU,
-  STATE_PINGPONG,
-  STATE_MASCOTA,
-  STATE_BLACKJACK,
-  STATE_SNAKE
-};
-```
-
-Cada estado representa una sección diferente de la aplicación.
-
-Cuando el usuario selecciona un juego, `appState` cambia al estado correspondiente.
-
-Cuando vuelve al menú:
-
-```cpp
-appState = STATE_MENU;
-```
-
-## 8. Funciones de la pantalla
-
-El programa utiliza funciones auxiliares para simplificar la escritura de información en la LCD.
-
-Por ejemplo:
-
-```cpp
-clearLine()
-```
-
-permite limpiar una línea de la pantalla.
-
-Otra función puede utilizarse para mostrar texto:
-
-```cpp
-printLine()
-```
-
-También puede existir una función para centrar texto:
-
-```cpp
-printCentered()
-```
-
-Estas funciones evitan repetir continuamente las mismas operaciones de la pantalla en cada juego.
-
-## 9. Menú principal
-
-El menú contiene los cuatro modos disponibles:
-
-```cpp
-const char *menuItems[] = {
-  "PingPong",
-  "Mascota",
-  "Blackjack",
-  "Snake"
-};
-```
-
-La variable:
-
-```cpp
-uint8_t menuIndex = 0;
-```
-
-indica qué opción está seleccionada.
-
-LEFT y RIGHT modifican `menuIndex`.
-
-Cuando se presiona OK se inicia el modo seleccionado.
-
-La función principal del menú es:
-
-```cpp
-handleMenu()
-```
-
-## 10. Ping Pong
-
-Ping Pong utiliza diferentes variables para almacenar el estado de la partida:
-
-* Posición de la pelota.
-* Dirección de la pelota.
-* Posición del jugador.
-* Posición de la IA.
-* Puntuación del jugador.
-* Puntuación de la IA.
-
-La puntuación se almacena en:
-
-```cpp
-uint8_t ppPlayerScore = 0;
-uint8_t ppAiScore = 0;
-```
-
-La posición vertical de las paletas tiene dos posibilidades:
-
-```text
-0 → arriba
-1 → abajo
-```
-
-La función:
-
-```cpp
-updatePingPong()
-```
-
-actualiza la posición de la pelota y comprueba las colisiones.
-
-## 11. Puntuación de Ping Pong
-
-El límite para ganar está definido por:
-
-```cpp
-#define PP_WIN_SCORE 5
-```
-
-Cuando el jugador llega a 5 puntos, gana.
-
-Si la IA llega a 5 puntos, la partida termina con derrota.
-
-## 12. Mascota
-
-La mascota tiene dos estadísticas:
-
-```cpp
-uint8_t petHunger = 9;
-uint8_t petHappy = 9;
-```
-
-Ambas comienzan con el valor máximo de `9`.
-
-La función:
-
-```cpp
-handleMascota()
-```
-
-se encarga de controlar la mascota.
-
-Entre sus tareas se encuentran:
-
-* Leer los botones.
-* Aumentar hambre.
-* Aumentar felicidad.
-* Reducir las estadísticas con el paso del tiempo.
-* Comprobar la derrota.
-* Comprobar la victoria.
-
-## 13. Alimentar
-
-Al presionar LEFT se alimenta a la mascota.
-
-El valor de hambre aumenta y no puede superar `9`.
-
-Por ejemplo:
-
-```cpp
-petHunger += 2;
-```
-
-Si el valor ya está cerca del máximo, se mantiene dentro del límite establecido.
-
-## 14. Jugar con la mascota
-
-Al presionar RIGHT aumenta la felicidad.
-
-La estadística también tiene un máximo de `9`.
-
-Esto permite mantener la mascota con vida durante más tiempo.
-
-## 15. Pérdida de la mascota
-
-La mascota pierde cuando alguna de sus estadísticas llega a `0`.
-
-La condición utilizada es:
-
-```cpp
-if (petHunger == 0 || petHappy == 0)
-```
-
-En ese momento el estado de la mascota cambia a `GAME_OVER`.
-
-## 16. Victoria de la mascota
-
-La mascota puede ganar si permanece con vida durante el tiempo establecido.
-
-El tiempo se define mediante:
-
-```cpp
-#define PET_SURVIVE_WIN_MS 60000UL
-```
-
-El valor corresponde inicialmente a **60 segundos**.
-
-## 17. Blackjack
-
-Blackjack utiliza una segunda máquina de estados para controlar las diferentes etapas de una ronda:
-
-```cpp
-enum BJPhase : uint8_t {
-  BJ_PLAYER_TURN,
-  BJ_DEALER_TURN,
-  BJ_ROUND_OVER,
-  BJ_MATCH_WIN,
-  BJ_MATCH_LOSE
-};
-```
-
-Los estados representan:
-
-* Turno del jugador.
-* Turno del dealer.
-* Fin de una ronda.
-* Victoria de la partida.
-* Derrota de la partida.
-
-## 18. Generación de cartas
-
-Las cartas se generan mediante:
-
-```cpp
-uint8_t randomCard()
-```
-
-La función devuelve un número aleatorio entre `1` y `10`.
-
-No se utiliza una baraja física, sino una generación aleatoria simplificada.
-
-## 19. Turno del jugador
-
-Durante:
-
-```cpp
-BJ_PLAYER_TURN
-```
-
-el jugador puede elegir entre pedir otra carta o plantarse.
-
-### Hit
-
-LEFT agrega una nueva carta:
-
-```cpp
-bjPlayer += randomCard();
-```
-
-Si el jugador supera `21`, pierde la ronda.
-
-### Stand
-
-RIGHT termina el turno del jugador:
-
-```cpp
-bjPhase = BJ_DEALER_TURN;
-```
-
-A partir de ese momento comienza el turno del dealer.
-
-## 20. Turno del dealer
-
-El dealer continúa recibiendo cartas mientras su puntuación sea menor que `17`.
-
-Cuando alcanza `17` o más, se compara su puntuación con la del jugador.
-
-Si el dealer supera `21`, el jugador gana la ronda.
-
-## 21. Resultado del Blackjack
-
-El número de victorias y derrotas se almacena en:
-
-```cpp
-uint8_t bjWins = 0;
-uint8_t bjLosses = 0;
-```
-
-La partida se configura para terminar cuando uno de los dos valores alcanza `3`:
-
-```cpp
-#define BJ_TARGET_WINS 3
-#define BJ_TARGET_LOSSES 3
-```
-
-Por lo tanto:
-
-* 3 victorias → Blackjack ganado.
-* 3 derrotas → Blackjack perdido.
-
-## 22. Snake
-
-Snake utiliza las 32 posiciones disponibles de la pantalla:
-
-```text
-16 columnas × 2 filas = 32 posiciones
-```
-
-Cada posición se representa mediante un número entre `0` y `31`.
-
-La serpiente se almacena en:
-
-```cpp
-uint8_t snakeBody[32];
-```
-
-La longitud inicial es:
-
-```cpp
-uint8_t snakeLen = 3;
-```
-
-## 23. Dirección de Snake
-
-La dirección se almacena en:
-
-```cpp
-uint8_t snakeDir = 1;
-```
-
-Los valores representan:
-
-| Valor | Dirección |
-| ----: | --------- |
-|     0 | Arriba    |
-|     1 | Derecha   |
-|     2 | Abajo     |
-|     3 | Izquierda |
-
-LEFT gira hacia la izquierda y RIGHT hacia la derecha.
-
-## 24. Movimiento de Snake
-
-La función:
-
-```cpp
-updateSnake()
-```
-
-calcula la nueva posición de la cabeza.
-
-Después comprueba:
-
-* Si la cabeza salió del tablero.
-* Si chocó contra el cuerpo.
-* Si encontró la comida.
-
-Si la cabeza sale del tablero o choca contra el cuerpo, se produce un `GAME OVER`.
-
-## 25. Comida
-
-La comida se coloca en una posición aleatoria:
-
-```cpp
-snakeFood = random(0, 32);
-```
-
-Antes de colocarla, el programa verifica que la posición no esté ocupada por la serpiente.
-
-Para esto se utiliza:
-
-```cpp
-snakeCellUsed()
-```
-
-Cuando la serpiente come la comida, aumenta su longitud.
-
-## 26. Victoria de Snake
-
-El tamaño necesario para ganar se define mediante:
-
-```cpp
-#define SNAKE_WIN_LENGTH 12
-```
-
-Cuando la serpiente alcanza esa longitud, el estado cambia a victoria.
-
-## 27. Velocidad de Snake
-
-La velocidad depende de la longitud de la serpiente.
-
-La función:
-
-```cpp
-snakeStepTime()
-```
-
-calcula cuánto tiempo debe transcurrir entre movimientos.
-
-A medida que la serpiente crece, el intervalo entre movimientos disminuye.
-
-Esto hace que el juego aumente progresivamente su dificultad.
-
-## 28. `millis()`
-
-Los diferentes juegos utilizan:
-
-```cpp
-millis()
-```
-
-para controlar el tiempo.
-
-Por ejemplo:
-
-```cpp
-uint32_t now = millis();
-
-if ((now - lastStep) >= stepTime) {
-  updateSnake();
+const uint16_t duracionesFase[] PROGMEM = { 80, 60, 50, 55, 30, ... };
+unsigned long mascotaDuracionFase(FaseMascota fase) {
+  return (unsigned long)pgm_read_word(&duracionesFase[(uint8_t)fase]) * 10;
 }
 ```
 
-Esto permite ejecutar acciones periódicamente sin utilizar `delay()`.
+El rebote de la sorpresa usa un **pico triangular** en vez de `sin()`, para no
+arrastrar la librería matemática.
 
-El uso de `millis()` también permite continuar leyendo los botones mientras transcurre el tiempo.
+Las cuatro estadísticas y las cuatro acciones se mantienen igual.
 
-## 29. `setup()`
+## 12. Blackjack
 
-`setup()` se ejecuta una sola vez al encender el ATtiny85.
-
-Se encarga de inicializar:
-
-* Los botones.
-* La comunicación I²C.
-* La pantalla LCD.
-* El generador de números aleatorios.
-* El menú inicial.
-
-Una estructura simplificada es:
+* Mazo real de 52 cartas, pero **guardado con un byte por carta**. El palo y el
+  valor se deducen del índice:
 
 ```cpp
-void setup() {
-  pinMode(PIN_BTN_LEFT, INPUT_PULLUP);
-  pinMode(PIN_BTN_RIGHT, INPUT_PULLUP);
-  pinMode(PIN_BTN_OK, INPUT_PULLUP);
-
-  Wire.begin();
-
-  lcd.init();
-  lcd.backlight();
-
-  randomSeed(...);
-
-  gotoMenu();
-}
+carta.carta.palo = nuevaCarta / 13;
+carta.carta.valor = (nuevaCarta % 13) + 1;
 ```
 
-## 30. `loop()`
+* Las cartas **entran volando desde los laterales**, alternando el lado, con la
+  misma interpolación que en el Mega.
+* La segunda carta de la banca sale tapada hasta el final.
+* Los palos se dibujan con círculos, líneas y cajas: se pierde el relleno del
+  triángulo, pero se distinguen los cuatro.
+* Se reparten cada 900 ms. Izquierda = pedir carta, derecha = plantarse.
 
-`loop()` se ejecuta continuamente mientras el ATtiny85 está encendido.
+## 13. Snake
 
-Primero obtiene el tiempo actual:
+* 24 segmentos como máximo, con coordenadas **`int16_t`**.
+* Movimiento continuo de 1,35 px por fotograma dentro de un marco interior de
+  116×40 px.
+* Cabeza con **ojos que miran hacia donde avanza**.
+* Comida que late cada 180 ms y doble marco al comer.
+* **Controlado por el jugador** y **sin giros de 180°**:
+  `izquierda` gira a la izquierda, `derecha` a la derecha, OK pausa y mantener OK
+  vuelve al menú.
 
-```cpp
-uint32_t now = millis();
+## 14. `millis()` en lugar de `delay()`
+
+Ningún juego usa `delay()`. Cada uno lleva su propio reloj de 16 ms y solo
+redibuja cuando toca, así que la pantalla nunca impide registrar las pulsaciones
+del jugador.
+
+## 15. Cómo compilar
+
+| Parámetro | Valor |
+| --- | --- |
+| Placa | `Arduino UNO` |
+| Core | `arduino:avr` (1.8.8) |
+
+```bash
+arduino-cli compile -b arduino:avr:uno src
 ```
 
-Después actualiza el estado de los botones:
+## 16. Memoria: números medidos
 
-```cpp
-updateButtons(now);
-```
+| Programa | Flash | % | SRAM | % |
+| --- | --- | --- | --- | --- |
+| `src/tinyPocket.ino` | 30964 B | **96 %** | 1753 B | **86 %** |
+| `src/examples/ejemploPelotaRebote.ino` | 13384 B | 41 % | 768 B | 38 % |
+| `src/examples/ejemploPingPong.ino` | 15216 B | 47 % | 767 B | 37 % |
+| `src/examples/ejemploBreakout.ino` | 17110 B | 53 % | 798 B | 39 % |
+| `src/examples/ejemploSnake.ino` | 13498 B | 42 % | 1018 B | 50 % |
+| `src/examples/ejemploBlackjack.ino` | 14918 B | 46 % | 898 B | 44 % |
+| `src/examples/ejemploOjosMascota.ino` | 13192 B | 41 % | 666 B | 33 % |
 
-Finalmente comprueba el estado actual de la aplicación y ejecuta la función correspondiente.
+**El programa principal está al 96 % de la flash y al 86 % de la RAM.** Es el
+punto apretado del proyecto: quedan unos 1,2 KB de flash y 295 bytes de RAM
+libres. Si hay que añadir algo nuevo, lo primero que hay que mirar es la tabla
+de fuentes.
 
-La selección se realiza mediante:
+## 17. Diferencias con las otras dos versiones
 
-```cpp
-switch (appState)
-```
+| | Mega 2560 | Arduino Uno | ATtiny85 |
+| --- | --- | --- | --- |
+| Pantalla | OLED 128×64, búfer completo | OLED 128×64, búfer de 1 página | **LCD 16×2** |
+| I2C | D20 / D21 | **A4 / A5** | PB0 / PB2 |
+| Flash del programa | 41816 B (16 %) | 30964 B (96 %) | 7968 B (97 %) |
+| SRAM del programa | 3169 B (39 %) | 1753 B (86 %) | 287 B (56 %) |
+| Fuentes | 3 | 1 (4×6) | 1 (caracteres) |
+| Interfaz | Títulos grandes | Títulos "en negrita" con una fuente | Una opción por fila |
 
-De esta manera, solamente se ejecuta la lógica correspondiente al modo activo.
+## 18. Limitaciones conocidas
 
-## 31. Volver al menú
-
-Para regresar al menú se utiliza:
-
-```cpp
-gotoMenu();
-```
-
-Esta función cambia el estado actual:
-
-```cpp
-appState = STATE_MENU;
-```
-
-y prepara nuevamente la pantalla para mostrar las opciones disponibles.
-
-## 32. Constantes de configuración
-
-Los valores principales de los juegos se encuentran definidos mediante constantes.
-
-Por ejemplo:
-
-```cpp
-#define PP_WIN_SCORE 5
-
-#define PET_SURVIVE_WIN_MS 60000UL
-
-#define BJ_TARGET_WINS 3
-#define BJ_TARGET_LOSSES 3
-
-#define SNAKE_WIN_LENGTH 12
-```
-
-Esto permite modificar la dificultad o duración de los juegos sin tener que cambiar la lógica principal.
-
-Por ejemplo, para que Ping Pong termine al conseguir 10 puntos:
-
-```cpp
-#define PP_WIN_SCORE 10
-```
-
-## 33. Organización del código
-
-El archivo `tinyPocket.ino` está dividido en diferentes secciones:
-
-| Sección       | Función                           |
-| ------------- | --------------------------------- |
-| Librerías     | Importa las dependencias          |
-| Configuración | Define pines y parámetros         |
-| Botones       | Lee y procesa los pulsadores      |
-| Pantalla      | Muestra información en la LCD     |
-| Estados       | Controla el modo actual           |
-| Menú          | Permite seleccionar un juego      |
-| Ping Pong     | Implementa el juego               |
-| Mascota       | Implementa la mascota virtual     |
-| Blackjack     | Implementa el juego de cartas     |
-| Snake         | Implementa el juego               |
-| `setup()`     | Inicializa el hardware            |
-| `loop()`      | Ejecuta continuamente el programa |
-
-## 34. Conceptos utilizados
-
-El proyecto utiliza varios conceptos importantes de programación embebida:
-
-* Variables y constantes.
-* Estructuras (`struct`).
-* Enumeraciones (`enum`).
-* Funciones.
-* Condicionales.
-* Bucles.
-* `switch`.
-* Máquinas de estados.
-* Lectura digital.
-* Comunicación I²C.
-* Temporización mediante `millis()`.
-* Generación de números aleatorios.
-* Antirrebote de botones.
-
-## 35. Modificación y ampliación
-
-El programa está diseñado para poder agregar nuevos modos.
-
-Para incorporar un nuevo juego sería necesario:
-
-1. Crear un nuevo estado en `AppState`.
-2. Crear las variables necesarias.
-3. Crear una función para iniciar el juego.
-4. Crear una función para actualizar su lógica.
-5. Crear una función para mostrar su información.
-6. Crear una función para manejar los botones.
-7. Agregar el juego al menú.
-8. Incorporar su estado al `switch` principal de `loop()`.
-
-De esta forma, TinyPocket puede seguir creciendo sin tener que modificar completamente la estructura existente.
+* **La flash está casi llena (96 %).** No hay sitio para un juego nuevo sin
+  quitar algo: el primer candidato a irse sería el Breakout, que es el bloque
+  más grande del programa.
+* **Solo una fuente de texto.** Todos los rótulos son pequeños; el precio de la
+  legibilidad fue una decisión de memoria.
+* El ATmega328P no tiene más pines I²C: A4 y A5 están ocupados por el OLED, así
+  que no se le puede añadir un segundo dispositivo I²C.
 
 ## Resumen
 
-`tinyPocket.ino` controla todo el funcionamiento de la mini consola.
-
-El programa utiliza una **máquina de estados** para administrar el menú y los diferentes modos, mientras que `millis()` permite controlar los tiempos de los juegos sin bloquear la ejecución.
-
-Los tres botones permiten controlar toda la interfaz y la pantalla LCD 16×2 funciona como sistema de visualización.
-
-Los cuatro modos disponibles son:
-
-* Ping Pong.
-* Mascota.
-* Blackjack.
-* Snake.
+`tinyPocket.ino` en esta carpeta es TinyPocket completo para Arduino Uno: las
+mismas seis funciones, los mismos botones y las mismas reglas de juego que en
+el Mega, con el búfer de pantalla reducido a una página, una sola fuente, un mazo
+de un byte por carta y coordenadas enteras. Cabe en 2 KB de RAM y 32 KB de flash,
+pero sin mucho margen para crecer.

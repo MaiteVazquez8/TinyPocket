@@ -1,730 +1,166 @@
+#include <Arduino.h>
 #include <Wire.h>
-#include <Adafruit_GFX.h>
-#include <Adafruit_SSD1306.h>
+#include <LiquidCrystal_I2C.h>
 
-#define ANCHO_PANTALLA 128
-#define ALTO_PANTALLA 64
+// ============================================================
+// TinyPocket - ejemplo de animacion: OJOS DE LA MASCOTA
+// Version ATtiny85.
+//
+// El OLED dibuja la cara con formas de 25x31 pixeles. En el LCD de
+// 16x2 no hay pixeles libres, asi que la misma expresion se cuenta con
+// las fases y los mismos tiempos, pero dibujada con caracteres:
+// parentesis para la cara, guion bajo como ojo abierto, un caracter
+// especial como ojo cerrado y un corazon como boca sonriente.
+//
+// Las fases son las mismas que en el ejemplo del Mega y las que usa
+// tinyPocket.ino: mirar, volver al centro, parpadear, feliz,
+// sorpresa, guino y dormir.
+//
+// Pantalla : LCD 16x2 I2C, direccion 0x27
+// I2C      : SDA -> PB0, SCL -> PB2
+// Botones  : PB3 (izq), PB4 (der), PB1 (OK) - no usados aqui
+//
+// Sin delay(): las fases avanzan con millis().
+//
+// Compilar con:
+//   placa  : ATtiny25/45/85 (No bootloader), ATTinyCore, 8 MHz interno
+// ============================================================
 
-Adafruit_SSD1306 pantalla(ANCHO_PANTALLA, ALTO_PANTALLA, &Wire, -1);
+#define LCD_ADDRESS 0x27
+const char CH_OJO_CERRADO = 0;
+const char CH_CORAZON = 1;
 
+LiquidCrystal_I2C lcd(LCD_ADDRESS, 16, 2);
+char buffer[33];
 
-// =====================================================
-// POSICIONES
-// =====================================================
+// Las fases y sus duraciones son las del ejemplo del OLED, en centi-
+// segundos para que la tabla quepa en PROGMEM sin gastar RAM.
+enum Fase {
+  NORMAL, MIRA_IZQ, PAUSA_IZQ, VUELVE_CENTRO_1, PAUSA_CENTRO_1,
+  MIRA_DER, PAUSA_DER, VUELVE_CENTRO_2, PAUSA_CENTRO_2,
+  PARPADEO_CIERRA, PARPADEO_ESPERA, PARPADEO_ABRE, PARPADEO_PAUSA,
+  FELIZ, FELIZ_ESPERA, FELIZ_NORMAL, FELIZ_PAUSA,
+  SORPRESA, SORPRESA_REBOTE, SORPRESA_ESPERA, SORPRESA_NORMAL, SORPRESA_PAUSA,
+  GUINO_CIERRA, GUINO_ESPERA, GUINO_ABRE, GUINO_PAUSA,
+  MIRA_POCO_IZQ, MIRA_POCO_PAUSA, MIRA_POCO_CENTRO, MIRA_POCO_PAUSA_2,
+  DORMIR_CIERRA, DORMIR, DESPERTAR, DESPERTAR_PAUSA,
+  DESPERTAR_PARPADEO_CIERRA, DESPERTAR_PARPADEO_ESPERA, DESPERTAR_PARPADEO_ABRE
+};
 
-const int CENTRO_IZQ = 43;
-const int CENTRO_DER = 85;
+const uint16_t duracionFase[] PROGMEM = {
+    80, 60, 50, 55, 30, 65, 50, 55, 50,
+    24,  9, 24, 60,
+    24, 100, 50, 40,
+    30, 21, 70, 45, 40,
+    20, 15, 20, 50,
+    40, 30, 40, 50,
+    36, 120, 36, 20, 24, 9, 24
+};
 
-const int CENTRO_Y = 32;
+Fase fase = NORMAL;
+unsigned long inicioFase = 0;
 
-
-// =====================================================
-// TAMAÑO DE LOS OJOS
-// =====================================================
-
-const float OJO_ANCHO = 25;
-const float OJO_ALTO = 31;
-
-
-// =====================================================
-// VELOCIDAD DE ANIMACION
-// =====================================================
-
-const int FRAME = 20;
-
-
-// =====================================================
-// SETUP
-// =====================================================
-
+void crearCaracteres() {
+  uint8_t ojoCerrado[8] = {0x00, 0x00, 0x00, 0x1F, 0x00, 0x00, 0x00, 0x00};
+  uint8_t corazon[8] = {0x00, 0x0A, 0x1F, 0x1F, 0x0E, 0x04, 0x00, 0x00};
+  lcd.createChar(CH_OJO_CERRADO, ojoCerrado);
+  lcd.createChar(CH_CORAZON, corazon);
+}
+void borrarPantalla() {
+  for (uint8_t i = 0; i < 32; i++) buffer[i] = ' ';
+  buffer[32] = '\0';
+}
+void pintar() {
+  buffer[16] = '\0';
+  lcd.setCursor(0, 0);
+  lcd.print(buffer);
+  lcd.setCursor(0, 1);
+  lcd.print(buffer + 16);
+}
+// Progreso de la fase, de 0 a 100.
+uint8_t progreso() {
+  unsigned long dur = (unsigned long)pgm_read_word(&duracionFase[fase]) * 10;
+  unsigned long t = millis() - inicioFase;
+  if (t >= dur) return 100;
+  return (uint8_t)((t * 100) / dur);
+}
 void setup() {
-
-  if (!pantalla.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
-
-    while (true) {
-    }
-  }
-
-  // I2C rapido
-  Wire.setClock(400000);
-
-  pantalla.clearDisplay();
-  pantalla.display();
+  randomSeed(analogRead(A0) + micros());
+  Wire.begin();
+  Wire.setClock(100000);
+  lcd.init();
+  lcd.backlight();
+  crearCaracteres();
+  inicioFase = millis();
 }
-
-
-// =====================================================
-// LOOP
-// =====================================================
-
 void loop() {
-
-  // -----------------------------------------
-  // ESTADO NORMAL
-  // -----------------------------------------
-
-  ojosNormales();
-
-  delay(800);
-
-
-  // -----------------------------------------
-  // MIRA LENTAMENTE A LA IZQUIERDA
-  // -----------------------------------------
-
-  moverOjos(0, -15, 600);
-
-  delay(500);
-
-
-  // -----------------------------------------
-  // VUELVE AL CENTRO
-  // -----------------------------------------
-
-  moverOjos(-15, 0, 550);
-
-  delay(300);
-
-
-  // -----------------------------------------
-  // MIRA A LA DERECHA
-  // -----------------------------------------
-
-  moverOjos(0, 15, 650);
-
-  delay(500);
-
-
-  // -----------------------------------------
-  // VUELVE AL CENTRO
-  // -----------------------------------------
-
-  moverOjos(15, 0, 550);
-
-  delay(500);
-
-
-  // -----------------------------------------
-  // PARPADEO
-  // -----------------------------------------
-
-  parpadear();
-
-  delay(600);
-
-
-  // -----------------------------------------
-  // FELIZ
-  // -----------------------------------------
-
-  feliz();
-
-  delay(1000);
-
-
-  // -----------------------------------------
-  // VUELVE A NORMAL
-  // -----------------------------------------
-
-  volverNormal(500);
-
-  delay(400);
-
-
-  // -----------------------------------------
-  // SORPRESA
-  // -----------------------------------------
-
-  sorpresa();
-
-  delay(700);
-
-
-  // -----------------------------------------
-  // VUELVE A NORMAL
-  // -----------------------------------------
-
-  volverNormal(450);
-
-  delay(400);
-
-
-  // -----------------------------------------
-  // GUIÑO
-  // -----------------------------------------
-
-  guino();
-
-  delay(500);
-
-
-  // -----------------------------------------
-  // MIRA UN POQUITO
-  // -----------------------------------------
-
-  moverOjos(0, -8, 400);
-
-  delay(300);
-
-  moverOjos(-8, 0, 400);
-
-  delay(500);
-
-
-  // -----------------------------------------
-  // DORMIR
-  // -----------------------------------------
-
-  dormir();
-
-  delay(1200);
-
-
-  // -----------------------------------------
-  // DESPERTAR
-  // -----------------------------------------
-
-  despertar();
-
-  delay(800);
-}
-
-
-// =====================================================
-// OJO REDONDEADO
-// =====================================================
-
-void dibujarOjo(float x, float y, float ancho, float alto) {
-
-  pantalla.fillRoundRect(
-    (int)(x - ancho / 2),
-    (int)(y - alto / 2),
-    (int)ancho,
-    (int)alto,
-    8,
-    SSD1306_WHITE
-  );
-}
-
-
-// =====================================================
-// DIBUJAR DOS OJOS
-// =====================================================
-
-void dibujarDosOjos(
-  float desplazamiento,
-  float ancho,
-  float alto,
-  float y
-) {
-
-  pantalla.clearDisplay();
-
-  dibujarOjo(
-    CENTRO_IZQ + desplazamiento,
-    y,
-    ancho,
-    alto
-  );
-
-  dibujarOjo(
-    CENTRO_DER + desplazamiento,
-    y,
-    ancho,
-    alto
-  );
-
-  pantalla.display();
-}
-
-
-// =====================================================
-// OJOS NORMALES
-// =====================================================
-
-void ojosNormales() {
-
-  dibujarDosOjos(
-    0,
-    OJO_ANCHO,
-    OJO_ALTO,
-    CENTRO_Y
-  );
-}
-
-
-// =====================================================
-// MOVIMIENTO SUAVE
-// =====================================================
-
-void moverOjos(float desde, float hasta, int duracion) {
-
-  int frames = duracion / FRAME;
-
-  for (int i = 0; i <= frames; i++) {
-
-    float progreso = (float)i / frames;
-
-    // Smoothstep
-    float suave =
-      progreso *
-      progreso *
-      (3.0 - 2.0 * progreso);
-
-    float posicion =
-      desde +
-      (hasta - desde) * suave;
-
-    dibujarDosOjos(
-      posicion,
-      OJO_ANCHO,
-      OJO_ALTO,
-      CENTRO_Y
-    );
-
-    delay(FRAME);
+  unsigned long dur = (unsigned long)pgm_read_word(&duracionFase[fase]) * 10;
+  if (millis() - inicioFase >= dur) {
+    fase = (Fase)((fase + 1) % (DESPERTAR_PARPADEO_ABRE + 1));
+    inicioFase = millis();
   }
-}
+  uint8_t p = progreso();
 
+  borrarPantalla();
 
-// =====================================================
-// PARPADEO MUY SUAVE
-// =====================================================
+  // Fila 0: la cara. Se mueve con la mirada y cambia segun la fase.
+  uint8_t desplazamiento = 0;
+  if (fase == MIRA_IZQ) desplazamiento = (uint8_t)(15 * p / 100);
+  else if (fase == VUELVE_CENTRO_1) desplazamiento = 15 - (uint8_t)(15 * p / 100);
+  else if (fase == MIRA_DER) desplazamiento = 0;
+  else if (fase == VUELVE_CENTRO_2) desplazamiento = (uint8_t)(15 * p / 100);
+  else if (fase == MIRA_POCO_IZQ) desplazamiento = (uint8_t)(8 * p / 100);
+  else if (fase == MIRA_POCO_CENTRO) desplazamiento = 8 - (uint8_t)(8 * p / 100);
 
-void parpadear() {
+  // Parpadeo: los dos ojos se cierran y se abren.
+  bool cerrado = (fase == PARPADEO_CIERRA && p > 60) ||
+                 (fase == PARPADEO_ESPERA) ||
+                 (fase == DESPERTAR_PARPADEO_ESPERA) ||
+                 (fase == DORMIR) ||
+                 (fase == GUINO_ESPERA);
+  bool feliz = (fase == FELIZ_ESPERA);
 
-  // CERRAR
-
-  for (int i = 0; i <= 12; i++) {
-
-    float progreso = (float)i / 12.0;
-
-    float suave =
-      progreso *
-      progreso *
-      (3.0 - 2.0 * progreso);
-
-    float alto =
-      OJO_ALTO *
-      (1.0 - suave);
-
-    if (alto < 2) {
-      alto = 2;
-    }
-
-    dibujarDosOjos(
-      0,
-      OJO_ANCHO,
-      alto,
-      CENTRO_Y
-    );
-
-    delay(FRAME);
+  char ojo = cerrado ? CH_OJO_CERRADO : '_';
+  if (feliz) {
+    buffer[4] = '<'; buffer[5] = '^'; buffer[6] = '>';
+    buffer[9] = '<'; buffer[10] = '^'; buffer[11] = '>';
+    buffer[7] = CH_CORAZON;
+  } else {
+    buffer[4] = '(';
+    buffer[5] = ojo;
+    buffer[6] = ')';
+    buffer[9] = '(';
+    buffer[10] = ojo;
+    buffer[11] = ')';
+  }
+  // La mirada desplaza los ojos hacia un lado.
+  if (desplazamiento > 0 && !cerrado) {
+    buffer[5] = (char)(5 + (desplazamiento > 3 ? 1 : 0));
+    buffer[10] = (char)(10 + (desplazamiento > 3 ? 1 : 0));
   }
 
-
-  // OJOS CERRADOS
-
-  pantalla.clearDisplay();
-
-  pantalla.drawLine(
-    CENTRO_IZQ - 10,
-    CENTRO_Y,
-    CENTRO_IZQ + 10,
-    CENTRO_Y,
-    SSD1306_WHITE
-  );
-
-  pantalla.drawLine(
-    CENTRO_DER - 10,
-    CENTRO_Y,
-    CENTRO_DER + 10,
-    CENTRO_Y,
-    SSD1306_WHITE
-  );
-
-  pantalla.display();
-
-  delay(90);
-
-
-  // ABRIR
-
-  for (int i = 0; i <= 12; i++) {
-
-    float progreso = (float)i / 12.0;
-
-    float suave =
-      progreso *
-      progreso *
-      (3.0 - 2.0 * progreso);
-
-    float alto =
-      2 +
-      (OJO_ALTO - 2) * suave;
-
-    dibujarDosOjos(
-      0,
-      OJO_ANCHO,
-      alto,
-      CENTRO_Y
-    );
-
-    delay(FRAME);
+  // Fila 1: que fase es, para poder seguirla con el debugger.
+  const char *nombre = "normal";
+  switch (fase) {
+    case NORMAL: nombre = "normal"; break;
+    case MIRA_IZQ: case PAUSA_IZQ: case VUELVE_CENTRO_1: case PAUSA_CENTRO_1:
+      nombre = "mirando izq"; break;
+    case MIRA_DER: case PAUSA_DER: case VUELVE_CENTRO_2: case PAUSA_CENTRO_2:
+      nombre = "mirando der"; break;
+    case PARPADEO_CIERRA: case PARPADEO_ESPERA: case PARPADEO_ABRE: case PARPADEO_PAUSA:
+      nombre = "parpadeo"; break;
+    case FELIZ: case FELIZ_ESPERA: case FELIZ_NORMAL: case FELIZ_PAUSA:
+      nombre = "feliz"; break;
+    case SORPRESA: case SORPRESA_REBOTE: case SORPRESA_ESPERA:
+    case SORPRESA_NORMAL: case SORPRESA_PAUSA:
+      nombre = "sorpresa"; break;
+    case GUINO_CIERRA: case GUINO_ESPERA: case GUINO_ABRE: case GUINO_PAUSA:
+      nombre = "guino"; break;
+    case DORMIR_CIERRA: case DORMIR: nombre = "durmiendo"; break;
+    default: nombre = "despierta"; break;
   }
-}
+  uint8_t i = 0;
+  while (nombre[i] != '\0' && i < 16) { buffer[16 + i] = nombre[i]; i++; }
 
-
-// =====================================================
-// FELIZ
-// =====================================================
-
-void feliz() {
-
-  // Los ojos se achican suavemente
-
-  for (int i = 0; i <= 12; i++) {
-
-    float progreso = (float)i / 12.0;
-
-    float suave =
-      progreso *
-      progreso *
-      (3.0 - 2.0 * progreso);
-
-    float alto =
-      OJO_ALTO -
-      (OJO_ALTO - 6) * suave;
-
-    dibujarDosOjos(
-      0,
-      OJO_ANCHO,
-      alto,
-      CENTRO_Y + 3
-    );
-
-    delay(FRAME);
-  }
-
-
-  // OJOS FELICES
-
-  pantalla.clearDisplay();
-
-  dibujarOjoFeliz(CENTRO_IZQ);
-  dibujarOjoFeliz(CENTRO_DER);
-
-  pantalla.display();
-}
-
-
-// =====================================================
-// OJO FELIZ
-// =====================================================
-
-void dibujarOjoFeliz(int x) {
-
-  pantalla.drawLine(
-    x - 11,
-    CENTRO_Y + 2,
-    x - 6,
-    CENTRO_Y - 3,
-    SSD1306_WHITE
-  );
-
-  pantalla.drawLine(
-    x - 6,
-    CENTRO_Y - 3,
-    x,
-    CENTRO_Y - 5,
-    SSD1306_WHITE
-  );
-
-  pantalla.drawLine(
-    x,
-    CENTRO_Y - 5,
-    x + 6,
-    CENTRO_Y - 3,
-    SSD1306_WHITE
-  );
-
-  pantalla.drawLine(
-    x + 6,
-    CENTRO_Y - 3,
-    x + 11,
-    CENTRO_Y + 2,
-    SSD1306_WHITE
-  );
-}
-
-
-// =====================================================
-// VOLVER A NORMAL
-// =====================================================
-
-void volverNormal(int duracion) {
-
-  int frames = duracion / FRAME;
-
-  for (int i = 0; i <= frames; i++) {
-
-    float progreso = (float)i / frames;
-
-    float suave =
-      progreso *
-      progreso *
-      (3.0 - 2.0 * progreso);
-
-    float alto =
-      6 +
-      (OJO_ALTO - 6) * suave;
-
-    dibujarDosOjos(
-      0,
-      OJO_ANCHO,
-      alto,
-      CENTRO_Y + 3 - (3 * suave)
-    );
-
-    delay(FRAME);
-  }
-}
-
-
-// =====================================================
-// SORPRESA
-// =====================================================
-
-void sorpresa() {
-
-  // Los ojos crecen
-
-  for (int i = 0; i <= 15; i++) {
-
-    float progreso = (float)i / 15.0;
-
-    float suave =
-      progreso *
-      progreso *
-      (3.0 - 2.0 * progreso);
-
-    float ancho =
-      OJO_ANCHO +
-      7 * suave;
-
-    float alto =
-      OJO_ALTO +
-      8 * suave;
-
-    dibujarDosOjos(
-      0,
-      ancho,
-      alto,
-      CENTRO_Y
-    );
-
-    delay(FRAME);
-  }
-
-
-  // Pequeño rebote
-
-  for (int i = 0; i < 3; i++) {
-
-    dibujarDosOjos(
-      0,
-      OJO_ANCHO + 7,
-      OJO_ALTO + 8,
-      CENTRO_Y - 1
-    );
-
-    delay(35);
-
-    dibujarDosOjos(
-      0,
-      OJO_ANCHO + 7,
-      OJO_ALTO + 8,
-      CENTRO_Y + 1
-    );
-
-    delay(35);
-  }
-}
-
-
-// =====================================================
-// GUIÑO
-// =====================================================
-
-void guino() {
-
-  // Cerrar ojo izquierdo
-
-  for (int i = 0; i <= 10; i++) {
-
-    float progreso = (float)i / 10.0;
-
-    float suave =
-      progreso *
-      progreso *
-      (3.0 - 2.0 * progreso);
-
-    float alto =
-      OJO_ALTO -
-      (OJO_ALTO - 3) * suave;
-
-    pantalla.clearDisplay();
-
-    dibujarOjo(
-      CENTRO_IZQ,
-      CENTRO_Y,
-      OJO_ANCHO,
-      alto
-    );
-
-    dibujarOjo(
-      CENTRO_DER,
-      CENTRO_Y,
-      OJO_ANCHO,
-      OJO_ALTO
-    );
-
-    pantalla.display();
-
-    delay(FRAME);
-  }
-
-
-  delay(150);
-
-
-  // Abrir
-
-  for (int i = 0; i <= 10; i++) {
-
-    float progreso = (float)i / 10.0;
-
-    float suave =
-      progreso *
-      progreso *
-      (3.0 - 2.0 * progreso);
-
-    float alto =
-      3 +
-      (OJO_ALTO - 3) * suave;
-
-    pantalla.clearDisplay();
-
-    dibujarOjo(
-      CENTRO_IZQ,
-      CENTRO_Y,
-      OJO_ANCHO,
-      alto
-    );
-
-    dibujarOjo(
-      CENTRO_DER,
-      CENTRO_Y,
-      OJO_ANCHO,
-      OJO_ALTO
-    );
-
-    pantalla.display();
-
-    delay(FRAME);
-  }
-}
-
-
-// =====================================================
-// DORMIR
-// =====================================================
-
-void dormir() {
-
-  for (int i = 0; i <= 18; i++) {
-
-    float progreso = (float)i / 18.0;
-
-    float suave =
-      progreso *
-      progreso *
-      (3.0 - 2.0 * progreso);
-
-    float alto =
-      OJO_ALTO -
-      (OJO_ALTO - 2) * suave;
-
-    dibujarDosOjos(
-      0,
-      OJO_ANCHO,
-      alto,
-      CENTRO_Y
-    );
-
-    delay(FRAME);
-  }
-
-
-  // Ojos cerrados
-
-  pantalla.clearDisplay();
-
-  pantalla.drawLine(
-    CENTRO_IZQ - 10,
-    CENTRO_Y,
-    CENTRO_IZQ + 10,
-    CENTRO_Y,
-    SSD1306_WHITE
-  );
-
-  pantalla.drawLine(
-    CENTRO_DER - 10,
-    CENTRO_Y,
-    CENTRO_DER + 10,
-    CENTRO_Y,
-    SSD1306_WHITE
-  );
-
-  pantalla.display();
-}
-
-
-// =====================================================
-// DESPERTAR
-// =====================================================
-
-void despertar() {
-
-  // Abrir lentamente
-
-  for (int i = 0; i <= 18; i++) {
-
-    float progreso = (float)i / 18.0;
-
-    float suave =
-      progreso *
-      progreso *
-      (3.0 - 2.0 * progreso);
-
-    float alto =
-      2 +
-      (OJO_ALTO - 2) * suave;
-
-    dibujarDosOjos(
-      0,
-      OJO_ANCHO,
-      alto,
-      CENTRO_Y
-    );
-
-    delay(FRAME);
-  }
-
-
-  delay(200);
-
-  // Parpadeo de recién despertado
-
-  parpadear();
+  pintar();
 }

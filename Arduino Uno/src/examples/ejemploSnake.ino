@@ -1,865 +1,197 @@
 #include <Arduino.h>
-#include <Wire.h>
-#include <Adafruit_GFX.h>
-#include <Adafruit_SSD1306.h>
+#include <U8g2lib.h>
+#include <math.h>
 
 // ============================================================
-// TINYPocket - SNAKE OLED
-// 128x64 - I2C 0x3C
-// IA automatica tipo jugador
+// TinyPocket - ejemplo de animacion: SNAKE CON IA
+// Version Arduino Uno (ATmega328P).
+//
+// IMPORTANTE: este ejemplo NO es el juego jugable. Aqui la serpiente
+// se mueve sola con una IA que persigue la comida, porque el objetivo
+// es ver el movimiento suave, los ojos de la cabeza y la comida que
+// late. El Snake CONTROLADO POR EL JUGADOR (con botones, sin IA y
+// sin giros de 180 grados) esta en tinyPocket.ino.
+//
+// OLED 128x64 I2C: SDA -> A4, SCL -> A5 (pines I2C del Uno)
+//
+// La animacion NO es bloqueante: todo con millis(), sin delay().
+//
+//
+// ADAPTACION AL UNO: el ATmega328P solo tiene 2 KB de SRAM, asi que la
+// pantalla usa el buffer de UNA PAGINA de U8g2 (el sufijo 1_ en vez de
+// F_): 128 bytes en lugar de 1024. El dibujo es exactamente el mismo;
+// U8g2 se encarga de volcar la pantalla por paginas. Con el buffer
+// completo este ejemplo no entraria en la memoria del Uno.// Compilar con: placa arduino:avr:uno
 // ============================================================
 
-#define OLED_WIDTH 128
-#define OLED_HEIGHT 64
-#define OLED_ADDRESS 0x3C
+U8G2_SH1106_128X64_NONAME_1_HW_I2C pantalla(U8G2_R0, U8X8_PIN_NONE);
+// Si tu OLED es SSD1306 en lugar de SH1106:
+// U8G2_SSD1306_128X64_NONAME_1_HW_I2C pantalla(U8G2_R0, U8X8_PIN_NONE);
 
-Adafruit_SSD1306 pantalla(OLED_WIDTH, OLED_HEIGHT, &Wire, -1);
-
-// ============================================================
-// CONFIGURACION
-// ============================================================
-
-#define MAX_SEGMENTOS 40
-
-const unsigned long FRAME_TIME = 20;
-
+const unsigned long FRAME_TIME = 20;   // 50 fps: el ojo humano no necesita mas
+const int MAX_SEGMENTOS = 40;
 const float VELOCIDAD = 1.55;
-
 const float DISTANCIA_COMIDA = 8.0;
 
-const float LIMITE_IZQUIERDO = 4.0;
-const float LIMITE_DERECHO = 124.0;
-const float LIMITE_SUPERIOR = 4.0;
-const float LIMITE_INFERIOR = 60.0;
-
-// ============================================================
-// SERPIENTE
-// ============================================================
-
-float snakeX[MAX_SEGMENTOS];
-float snakeY[MAX_SEGMENTOS];
-
-uint8_t snakeLongitud = 8;
-
-// Direccion actual
-int direccionX = 0;
-int direccionY = -1;
-
-// ============================================================
-// COMIDA
-// ============================================================
-
-float comidaX;
-float comidaY;
-
-bool comidaVisible = true;
-
-// ============================================================
-// TIEMPOS
-// ============================================================
-
+float snakeX[MAX_SEGMENTOS], snakeY[MAX_SEGMENTOS];
+int longitud = 8;
+int dirX = 0, dirY = -1;               // arranca hacia arriba
+float comidaX = 32, comidaY = 20;
 unsigned long ultimoFrame = 0;
-unsigned long ultimoPensamiento = 0;
-
-const unsigned long TIEMPO_PENSAMIENTO = 80;
 
 // ============================================================
-// DISTANCIA
+// IA
 // ============================================================
 
-float distanciaEntre(
-  float x1,
-  float y1,
-  float x2,
-  float y2
-) {
-
+float distancia(float x1, float y1, float x2, float y2) {
   float dx = x2 - x1;
   float dy = y2 - y1;
+  return sqrt(dx * dx + dy * dy);
+}
+bool posicionPeligrosa(float x, float y) {
+  if (x <= 4 || x >= 124 || y <= 4 || y >= 60) return true;
+  // No se miran los 2 primeros segmentos porque van pegados a la cabeza.
+  for (int i = 4; i < longitud - 2; i++)
+    if (distancia(x, y, snakeX[i], snakeY[i]) < 5.5) return true;
+  return false;
+}
+bool direccionSegura(int ndx, int ndy) {
+  // Mira 5, 10 y 15 pixeles por delante: si hay pared o cuerpo, no.
+  for (int d = 5; d <= 15; d += 5) {
+    if (posicionPeligrosa(snakeX[0] + ndx * d, snakeY[0] + ndy * d)) return false;
+  }
+  return true;
+}
+int evaluarDireccion(int ndx, int ndy) {
+  float futuroX = snakeX[0] + ndx * 25;
+  float futuroY = snakeY[0] + ndy * 25;
+  float distanciaActual = distancia(snakeX[0], snakeY[0], comidaX, comidaY);
+  float distanciaFutura = distancia(futuroX, futuroY, comidaX, comidaY);
 
-  return sqrt(
-    dx * dx +
-    dy * dy
-  );
+  int puntaje = 0;
+  // Cuanto mas cerca quede la comida, mejor.
+  puntaje += (int)(distanciaFutura * 2.5);
+  if (distanciaFutura < distanciaActual) puntaje -= 45;
+  else puntaje += 25;
+
+  // Seguridad: es una mala opcion pero no imposible.
+  if (!direccionSegura(ndx, ndy)) puntaje += 1000;
+  // Media vuelta prohibida.
+  if (ndx == -dirX && ndy == -dirY) puntaje += 500;
+  // Un poco de azar para que no se quede en un ciclo cerrado.
+  puntaje += random(0, 6);
+  return puntaje;
+}
+void pensarMovimiento() {
+  int posiblesX[4] = {1, -1, 0, 0};
+  int posiblesY[4] = {0, 0, 1, -1};
+  int mejor = -1;
+  int mejorPuntaje = 999999;
+  for (int i = 0; i < 4; i++) {
+    if (posiblesX[i] == -dirX && posiblesY[i] == -dirY) continue;
+    int p = evaluarDireccion(posiblesX[i], posiblesY[i]);
+    if (p < mejorPuntaje) { mejorPuntaje = p; mejor = i; }
+  }
+  if (mejor >= 0) { dirX = posiblesX[mejor]; dirY = posiblesY[mejor]; }
 }
 
 // ============================================================
-// GENERAR COMIDA
+// ANIMACION
 // ============================================================
 
 void generarComida() {
-
-  bool valida = false;
-
-  while (!valida) {
-
-    // La comida aparece en una cuadricula.
-    // Esto hace que sea mucho mas facil alcanzarla.
-    comidaX = random(12, 116);
-    comidaY = random(8, 56);
-
-    comidaX = ((int)comidaX / 4) * 4;
-    comidaY = ((int)comidaY / 4) * 4;
-
-    valida = true;
-
-    // Evitar que aparezca dentro del cuerpo
-    for (int i = 0; i < snakeLongitud; i++) {
-
-      if (
-        distanciaEntre(
-          comidaX,
-          comidaY,
-          snakeX[i],
-          snakeY[i]
-        ) < 8
-      ) {
-
-        valida = false;
-        break;
-      }
-    }
+  for (int intento = 0; intento < 50; intento++) {
+    float x = random(12, 116);
+    float y = random(8, 56);
+    x = ((int)x / 4) * 4;
+    y = ((int)y / 4) * 4;
+    bool libre = true;
+    for (int i = 0; i < longitud; i++)
+      if (distancia(x, y, snakeX[i], snakeY[i]) < DISTANCIA_COMIDA) { libre = false; break; }
+    if (libre) { comidaX = x; comidaY = y; return; }
   }
 }
-
-// ============================================================
-// PELIGRO INMEDIATO
-// ============================================================
-
-bool posicionPeligrosa(
-  float x,
-  float y
-) {
-
-  // ----------------------------------------------------------
-  // PARED
-  // ----------------------------------------------------------
-
-  if (x <= LIMITE_IZQUIERDO) {
-    return true;
-  }
-
-  if (x >= LIMITE_DERECHO) {
-    return true;
-  }
-
-  if (y <= LIMITE_SUPERIOR) {
-    return true;
-  }
-
-  if (y >= LIMITE_INFERIOR) {
-    return true;
-  }
-
-  // ----------------------------------------------------------
-  // CUERPO
-  // ----------------------------------------------------------
-
-  // No miramos toda la serpiente con el mismo peso.
-  //
-  // La cola esta avanzando y puede desaparecer del lugar,
-  // por eso los ultimos segmentos son menos importantes.
-
-  for (int i = 4; i < snakeLongitud - 2; i++) {
-
-    float distanciaCuerpo =
-      distanciaEntre(
-        x,
-        y,
-        snakeX[i],
-        snakeY[i]
-      );
-
-    if (distanciaCuerpo < 5.5) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
-// ============================================================
-// COMPROBAR UNA DIRECCION
-// ============================================================
-
-bool direccionEsSegura(
-  int nuevaDireccionX,
-  int nuevaDireccionY
-) {
-
-  float cabezaX = snakeX[0];
-  float cabezaY = snakeY[0];
-
-  // Miramos solamente lo suficiente para evitar
-  // chocarnos inmediatamente.
-  for (int distanciaMira = 5; distanciaMira <= 15; distanciaMira += 5) {
-
-    float pruebaX =
-      cabezaX +
-      nuevaDireccionX *
-      distanciaMira;
-
-    float pruebaY =
-      cabezaY +
-      nuevaDireccionY *
-      distanciaMira;
-
-    if (
-      posicionPeligrosa(
-        pruebaX,
-        pruebaY
-      )
-    ) {
-
-      return false;
-    }
-  }
-
-  return true;
-}
-
-// ============================================================
-// CALCULAR QUE TAN BUENA ES UNA DIRECCION
-// ============================================================
-
-float evaluarDireccion(
-  int nuevaDireccionX,
-  int nuevaDireccionY
-) {
-
-  float cabezaX = snakeX[0];
-  float cabezaY = snakeY[0];
-
-  // ----------------------------------------------------------
-  // POSICION FUTURA
-  // ----------------------------------------------------------
-
-  float futuroX =
-    cabezaX +
-    nuevaDireccionX *
-    25;
-
-  float futuroY =
-    cabezaY +
-    nuevaDireccionY *
-    25;
-
-  // ----------------------------------------------------------
-  // DISTANCIA A LA COMIDA
-  // ----------------------------------------------------------
-
-  float distanciaActual =
-    distanciaEntre(
-      cabezaX,
-      cabezaY,
-      comidaX,
-      comidaY
-    );
-
-  float distanciaFutura =
-    distanciaEntre(
-      futuroX,
-      futuroY,
-      comidaX,
-      comidaY
-    );
-
-  float puntaje = 0;
-
-  // ==========================================================
-  // PRIORIDAD PRINCIPAL: COMIDA
-  // ==========================================================
-
-  // Cuanto mas cerca quede la comida,
-  // mejor es la direccion.
-  puntaje += distanciaFutura * 2.5;
-
-  // Si realmente nos acercamos, damos un bonus enorme.
-  if (
-    distanciaFutura <
-    distanciaActual
-  ) {
-
-    puntaje -= 45;
-  }
-
-  // Si nos alejamos, penalizamos.
-  else {
-
-    puntaje += 25;
-  }
-
-  // ==========================================================
-  // SI LA COMIDA ESTA A UN COSTADO
-  // ==========================================================
-
-  float diferenciaX =
-    abs(comidaX - cabezaX);
-
-  float diferenciaY =
-    abs(comidaY - cabezaY);
-
-  // Si la comida esta claramente a la derecha
-  if (
-    comidaX > cabezaX + 5 &&
-    diferenciaX > diferenciaY
-  ) {
-
-    if (nuevaDireccionX == 1) {
-      puntaje -= 70;
-    }
-  }
-
-  // Si la comida esta claramente a la izquierda
-  if (
-    comidaX < cabezaX - 5 &&
-    diferenciaX > diferenciaY
-  ) {
-
-    if (nuevaDireccionX == -1) {
-      puntaje -= 70;
-    }
-  }
-
-  // Si la comida esta claramente abajo
-  if (
-    comidaY > cabezaY + 5 &&
-    diferenciaY > diferenciaX
-  ) {
-
-    if (nuevaDireccionY == 1) {
-      puntaje -= 70;
-    }
-  }
-
-  // Si la comida esta claramente arriba
-  if (
-    comidaY < cabezaY - 5 &&
-    diferenciaY > diferenciaX
-  ) {
-
-    if (nuevaDireccionY == -1) {
-      puntaje -= 70;
-    }
-  }
-
-  // ==========================================================
-  // SEGURIDAD
-  // ==========================================================
-
-  if (
-    !direccionEsSegura(
-      nuevaDireccionX,
-      nuevaDireccionY
-    )
-  ) {
-
-    // Sigue pudiendo elegirlo si es necesario,
-    // pero es MUY mala opcion.
-    puntaje += 1000;
-  }
-
-  // ==========================================================
-  // NO DAR MEDIA VUELTA
-  // ==========================================================
-
-  if (
-    nuevaDireccionX == -direccionX &&
-    nuevaDireccionY == -direccionY
-  ) {
-
-    puntaje += 500;
-  }
-
-  // ==========================================================
-  // PEQUENA IMPERFECCION
-  // ==========================================================
-
-  puntaje += random(0, 6);
-
-  return puntaje;
-}
-
-// ============================================================
-// DECIDIR MOVIMIENTO
-// ============================================================
-
-void pensarMovimiento() {
-
-  int posiblesX[4] = {
-    1,
-    -1,
-    0,
-    0
-  };
-
-  int posiblesY[4] = {
-    0,
-    0,
-    1,
-    -1
-  };
-
-  float mejorPuntaje = 999999;
-  int mejorOpcion = -1;
-
-  // ----------------------------------------------------------
-  // EVALUAR LAS 4 DIRECCIONES
-  // ----------------------------------------------------------
-
-  for (int i = 0; i < 4; i++) {
-
-    int nuevaX = posiblesX[i];
-    int nuevaY = posiblesY[i];
-
-    // Nunca girar directamente hacia atras.
-    if (
-      nuevaX == -direccionX &&
-      nuevaY == -direccionY
-    ) {
-
-      continue;
-    }
-
-    float puntaje =
-      evaluarDireccion(
-        nuevaX,
-        nuevaY
-      );
-
-    if (
-      puntaje <
-      mejorPuntaje
-    ) {
-
-      mejorPuntaje = puntaje;
-      mejorOpcion = i;
-    }
-  }
-
-  // ----------------------------------------------------------
-  // APLICAR DIRECCION
-  // ----------------------------------------------------------
-
-  if (mejorOpcion >= 0) {
-
-    direccionX =
-      posiblesX[mejorOpcion];
-
-    direccionY =
-      posiblesY[mejorOpcion];
-  }
-}
-
-// ============================================================
-// COMPROBAR COLISION CON EL CUERPO
-// ============================================================
-
-bool chocoConSuCuerpo() {
-
-  // Empezamos desde el segmento 4.
-  // Los primeros segmentos estan demasiado cerca de la cabeza.
-  for (int i = 4; i < snakeLongitud; i++) {
-
-    float d =
-      distanciaEntre(
-        snakeX[0],
-        snakeY[0],
-        snakeX[i],
-        snakeY[i]
-      );
-
-    if (d < 4.0) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
-// ============================================================
-// COMPROBAR COMIDA
-// ============================================================
-
-bool estaComiendo() {
-
-  float d =
-    distanciaEntre(
-      snakeX[0],
-      snakeY[0],
-      comidaX,
-      comidaY
-    );
-
-  return d < DISTANCIA_COMIDA;
-}
-
-// ============================================================
-// REINICIAR
-// ============================================================
-
-void reiniciarJuego() {
-
-  snakeLongitud = 8;
-
-  float inicioX = 64;
-  float inicioY = 40;
-
-  // Cuerpo horizontal
-  for (int i = 0; i < snakeLongitud; i++) {
-
-    snakeX[i] =
-      inicioX -
-      i * 4;
-
-    snakeY[i] =
-      inicioY;
-  }
-
-  // IMPORTANTE:
-  // Arrancar hacia arriba.
-  direccionX = 0;
-  direccionY = -1;
-
+void reiniciar() {
+  longitud = 8;
+  for (int i = 0; i < longitud; i++) { snakeX[i] = 64 - i * 4; snakeY[i] = 40; }
+  dirX = 0; dirY = -1;
   generarComida();
-
-  ultimoPensamiento = 0;
 }
-
-// ============================================================
-// ACTUALIZAR SERPIENTE
-// ============================================================
-
 void actualizarSerpiente() {
+  for (int i = longitud - 1; i > 0; i--) { snakeX[i] = snakeX[i - 1]; snakeY[i] = snakeY[i - 1]; }
+  snakeX[0] += dirX * VELOCIDAD;
+  snakeY[0] += dirY * VELOCIDAD;
 
-  // ----------------------------------------------------------
-  // MOVER CUERPO
-  // ----------------------------------------------------------
+  if (snakeX[0] <= 1 || snakeX[0] >= 127 || snakeY[0] <= 1 || snakeY[0] >= 63) { reiniciar(); return; }
+  for (int i = 4; i < longitud; i++)
+    if (distancia(snakeX[0], snakeY[0], snakeX[i], snakeY[i]) < 4.0) { reiniciar(); return; }
 
-  for (
-    int i = snakeLongitud - 1;
-    i > 0;
-    i--
-  ) {
-
-    snakeX[i] =
-      snakeX[i - 1];
-
-    snakeY[i] =
-      snakeY[i - 1];
-  }
-
-  // ----------------------------------------------------------
-  // MOVER CABEZA
-  // ----------------------------------------------------------
-
-  snakeX[0] +=
-    direccionX *
-    VELOCIDAD;
-
-  snakeY[0] +=
-    direccionY *
-    VELOCIDAD;
-
-  // ----------------------------------------------------------
-  // PARED
-  // ----------------------------------------------------------
-
-  if (
-    snakeX[0] <= 1 ||
-    snakeX[0] >= 127 ||
-    snakeY[0] <= 1 ||
-    snakeY[0] >= 63
-  ) {
-
-    reiniciarJuego();
-    return;
-  }
-
-  // ----------------------------------------------------------
-  // CUERPO
-  // ----------------------------------------------------------
-
-  if (chocoConSuCuerpo()) {
-
-    reiniciarJuego();
-    return;
-  }
-
-  // ----------------------------------------------------------
-  // COMIDA
-  // ----------------------------------------------------------
-
-  if (
-    comidaVisible &&
-    estaComiendo()
-  ) {
-
-    if (
-      snakeLongitud <
-      MAX_SEGMENTOS
-    ) {
-
-      snakeX[snakeLongitud] =
-        snakeX[snakeLongitud - 1];
-
-      snakeY[snakeLongitud] =
-        snakeY[snakeLongitud - 1];
-
-      snakeLongitud++;
+  if (distancia(snakeX[0], snakeY[0], comidaX, comidaY) < DISTANCIA_COMIDA) {
+    if (longitud < MAX_SEGMENTOS) {
+      snakeX[longitud] = snakeX[longitud - 1];
+      snakeY[longitud] = snakeY[longitud - 1];
+      longitud++;
     }
-
     generarComida();
   }
 }
 
 // ============================================================
-// DIBUJAR SERPIENTE
+// DIBUJO
 // ============================================================
 
 void dibujarSerpiente() {
-
-  for (
-    int i = snakeLongitud - 1;
-    i >= 0;
-    i--
-  ) {
-
-    int x =
-      (int)snakeX[i];
-
-    int y =
-      (int)snakeY[i];
-
-    // --------------------------------------------------------
-    // CABEZA
-    // --------------------------------------------------------
-
+  // De la cola a la cabeza, para que la cabeza quede encima.
+  for (int i = longitud - 1; i >= 0; i--) {
+    int x = (int)snakeX[i];
+    int y = (int)snakeY[i];
     if (i == 0) {
-
-      pantalla.fillCircle(
-        x,
-        y,
-        3,
-        SSD1306_WHITE
-      );
-
-      // Ojos
-      int ojo1X = x;
-      int ojo1Y = y;
-
-      int ojo2X = x;
-      int ojo2Y = y;
-
-      if (direccionX > 0) {
-
-        ojo1X += 1;
-        ojo1Y -= 1;
-
-        ojo2X += 1;
-        ojo2Y += 1;
-      }
-
-      else if (direccionX < 0) {
-
-        ojo1X -= 1;
-        ojo1Y -= 1;
-
-        ojo2X -= 1;
-        ojo2Y += 1;
-      }
-
-      else if (direccionY < 0) {
-
-        ojo1X -= 1;
-        ojo1Y -= 1;
-
-        ojo2X += 1;
-        ojo2Y -= 1;
-      }
-
-      else {
-
-        ojo1X -= 1;
-        ojo1Y += 1;
-
-        ojo2X += 1;
-        ojo2Y += 1;
-      }
-
-      pantalla.drawPixel(
-        ojo1X,
-        ojo1Y,
-        SSD1306_BLACK
-      );
-
-      pantalla.drawPixel(
-        ojo2X,
-        ojo2Y,
-        SSD1306_BLACK
-      );
-    }
-
-    // --------------------------------------------------------
-    // CUERPO
-    // --------------------------------------------------------
-
-    else {
-
-      pantalla.fillCircle(
-        x,
-        y,
-        2,
-        SSD1306_WHITE
-      );
+      pantalla.drawDisc(x, y, 3);
+      // Los ojos miran hacia donde avanza.
+      int ex1 = x, ey1 = y, ex2 = x, ey2 = y;
+      if (dirX > 0) { ex1++; ey1--; ex2++; ey2++; }
+      else if (dirX < 0) { ex1--; ey1--; ex2--; ey2++; }
+      else if (dirY < 0) { ex1--; ey1--; ex2++; ey2--; }
+      else { ex1--; ey1++; ex2++; ey2++; }
+      pantalla.setDrawColor(0);
+      pantalla.drawPixel(ex1, ey1);
+      pantalla.drawPixel(ex2, ey2);
+      pantalla.setDrawColor(1);
+    } else {
+      pantalla.drawDisc(x, y, 2);
     }
   }
 }
+void dibujar() {
+  pantalla.clearBuffer();
+  pantalla.drawFrame(0, 0, 128, 64);
 
-// ============================================================
-// DIBUJAR COMIDA
-// ============================================================
-
-void dibujarComida() {
-
-  if (!comidaVisible) {
-    return;
-  }
-
-  int x =
-    (int)comidaX;
-
-  int y =
-    (int)comidaY;
-
-  // Animacion suave
+  // Comida: late cada 180 ms y lleva un brillo encima.
   int radio = 2;
+  if (((millis() / 180) % 2) == 0) radio = 3;
+  pantalla.drawDisc((int)comidaX, (int)comidaY, radio);
+  pantalla.drawPixel((int)comidaX, (int)comidaY - radio - 1);
 
-  if (
-    ((millis() / 180) % 2) == 0
-  ) {
-
-    radio = 3;
-  }
-
-  pantalla.fillCircle(
-    x,
-    y,
-    radio,
-    SSD1306_WHITE
-  );
-
-  pantalla.drawPixel(
-    x,
-    y - radio - 1,
-    SSD1306_WHITE
-  );
+  dibujarSerpiente();
+  pantalla.sendBuffer();
 }
 
 // ============================================================
-// BORDE
-// ============================================================
-
-void dibujarBorde() {
-
-  pantalla.drawRect(
-    0,
-    0,
-    OLED_WIDTH,
-    OLED_HEIGHT,
-    SSD1306_WHITE
-  );
-}
-
-// ============================================================
-// SETUP
+// SETUP / LOOP
 // ============================================================
 
 void setup() {
-
-  Wire.begin();
-
-  Wire.setClock(400000);
-
-  if (
-    !pantalla.begin(
-      SSD1306_SWITCHCAPVCC,
-      OLED_ADDRESS
-    )
-  ) {
-
-    while (true) {
-    }
-  }
-
-  pantalla.clearDisplay();
-  pantalla.display();
-
-  randomSeed(
-    analogRead(A0) +
-    micros()
-  );
-
-  reiniciarJuego();
+  pantalla.begin();
+  pantalla.setContrast(180);
+  randomSeed(analogRead(A0) + micros());
+  reiniciar();
 }
 
-// ============================================================
-// LOOP
-// ============================================================
-
 void loop() {
-
-  unsigned long ahora =
-    millis();
-
-  // ----------------------------------------------------------
-  // FRAME
-  // ----------------------------------------------------------
-
-  if (
-    ahora - ultimoFrame <
-    FRAME_TIME
-  ) {
-
-    return;
-  }
-
-  ultimoFrame =
-    ahora;
-
-  // ----------------------------------------------------------
-  // IA
-  // ----------------------------------------------------------
-
-  if (
-    ultimoPensamiento == 0 ||
-    ahora - ultimoPensamiento >=
-    TIEMPO_PENSAMIENTO
-  ) {
-
-    pensarMovimiento();
-
-    ultimoPensamiento =
-      ahora;
-  }
-
-  // ----------------------------------------------------------
-  // ACTUALIZAR
-  // ----------------------------------------------------------
-
+  unsigned long ahora = millis();
+  if (ahora - ultimoFrame < FRAME_TIME) return;
+  ultimoFrame = ahora;
+  pensarMovimiento();
   actualizarSerpiente();
-
-  // ----------------------------------------------------------
-  // DIBUJAR
-  // ----------------------------------------------------------
-
-  pantalla.clearDisplay();
-
-  dibujarBorde();
-
-  dibujarComida();
-
-  dibujarSerpiente();
-
-  pantalla.display();
+  dibujar();
 }

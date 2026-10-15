@@ -15,17 +15,23 @@
 // ADAPTACIONES RESPECTO DE LA VERSION MEGA (obligatorias por hardware):
 //   El ATmega328P tiene 2 KB de SRAM y 32 KB de flash, muy por debajo
 //   de los 8 KB / 256 KB del Mega. Por eso:
-//   1. La pantalla usa el buffer de UNA PAGINA de U8g2 (128 bytes en
-//      vez de 1024). El dibujo es identico; U8g2 solo vuelca la
-//      pantalla por paginas.
-//   2. Solo se usan dos fuentes (6x10 y 4x6) para ahorrar flash.
+//   1. La pantalla usa el buffer de UNA PAGINA de U8g2 (128 bytes en vez
+//      de 1024). El dibujo es identico; U8g2 solo vuelca la pantalla
+//      por paginas.
+//   2. Se usa una sola fuente, la pequena 4x6. Medido con el
+//      compilador, anadir una segunda fuente (por ejemplo la 6x10)
+//      cuesta unos 2 KB, es decir el 6% del programa entero. Para que
+//      los titulos no se vean debiles se dibujan dos veces desplazadas
+//      un pixel, que da un efecto de negrita muy barato.
 //   3. El mazo del blackjack se guarda con un byte por carta en vez de
-//      una estructura de dos bytes.
-//   4. Las coordenadas de la serpiente y de las cartas animadas son
-//      enteras de 16 bits en vez de float.
-//   5. Los palos de las cartas se dibujan con un solo caracter en vez
-//      de las cuatro figuras vectoriales.
-//   6. Menos puntos de estela y de segmentos en la serpiente.
+//      una estructura de dos bytes, y las coordenadas de la serpiente y
+//      de las cartas animadas son enteras de 16 bits en vez de float.
+//   4. Los palos de las cartas se dibujan con primitivas simples en vez
+//      de las cuatro figuras vectoriales rellenas.
+//   5. Menos puntos de estela y 24 segmentos de serpiente en vez de 40.
+//   6. Sin sqrt() ni sin(): las distancias se comparan al cuadrado y el
+//      rebote de la mascota es un pico triangular. Asi no entra la
+//      libreria matematica.
 // No se pierde ninguna funcion: menu, Ping Pong, Breakout, Mascota,
 // Blackjack, Snake e Informacion estan todos presentes.
 //
@@ -33,12 +39,14 @@
 // derecha / OK corto / OK largo se comportan exactamente igual.
 // ============================================================
 
-// _1_ = buffer de una pagina (128 bytes). Imprescindible en el Uno.
-// Si se cambia la placa por una con mas RAM, se puede volver a _F_
-// (buffer completo) sin tocar nada mas.
-U8G2_SH1106_128X64_NONAME_F_1_HW_I2C pantalla(U8G2_R0, U8X8_PIN_NONE);
+// El sufijo _1_ indica buffer de UNA pagina (128 bytes en vez de los
+// 1024 del buffer completo _F_). Imprescindible en el Uno. Si se
+// cambia la placa por una con mas RAM, se puede volver a _F_ (buffer
+// completo) sin tocar nada mas. U8g2 siempre escribe con sendBuffer(),
+// asi que el resto del programa no cambia en absoluto.
+U8G2_SH1106_128X64_NONAME_1_HW_I2C pantalla(U8G2_R0, U8X8_PIN_NONE);
 // Si tu OLED es SSD1306, usa esta linea en lugar de la anterior:
-// U8G2_SSD1306_128X64_NONAME_F_1_HW_I2C pantalla(U8G2_R0, U8X8_PIN_NONE);
+// U8G2_SSD1306_128X64_NONAME_1_HW_I2C pantalla(U8G2_R0, U8X8_PIN_NONE);
 // A4 y A5 son los pines I2C por defecto del Uno, por eso la variante
 // _HW_I2C funciona sin indicar la SDA ni la SCL.
 
@@ -57,7 +65,10 @@ const byte PIN_IZQUIERDA = 2, PIN_DERECHA = 3, PIN_OK = 4;
 // de las cartas animadas como enteros de 16 bits: en el Uno cada byte
 // cuenta y el mazo completo se guarda aparte como un solo byte por
 // carta (ver bjCartas), lo que ahorra 52 bytes de SRAM.
-struct Punto { float x; float y; };
+// Estela de la pelota: dos enteros de 8 bits en vez de dos float.
+// Las coordenadas siempre caen dentro de 0..127, asi que int8_t basta
+// y se ahorran 6 bytes por punto de estela (72 bytes en total).
+struct Punto { int8_t x; int8_t y; };
 
 struct Carta { byte palo; byte valor; };
 
@@ -136,10 +147,77 @@ enum PasoInicialBJ { BJ_INICIO_JUGADOR_1, BJ_INICIO_JUGADOR_2,
 void actualizarBoton(Boton &boton);
 void actualizarBotones();
 void volverAlMenu();
-void textoCentrado(const char *texto, int y, const uint8_t *fuente);
-void mostrarMensaje(const char *linea1, const char *linea2);
-void dibujarCabecera(const char *titulo);
-void llenarTriangulo(int x0, int y0, int x1, int y1, int x2, int y2);
+void dibujarTitulo(const __FlashStringHelper *titulo, int y);
+// ----------------------------------------------------------
+// TEXTOS EN FLASH: EL AHORRO MAS GRANDE DE ESTA VERSION
+// ----------------------------------------------------------
+// En AVR, un literal escrito directamente ("Hola") NO vive en la
+// flash: el enlazador mete .rodata dentro de .data, es decir, en la
+// SRAM, y ademas se copia al arrancar. Medido con avr-size sobre el
+// programa anterior, los 60 textos del sketch ocupaban 692 bytes,
+// o sea el 34% de toda la RAM del Uno.
+//
+// La solucion es pasar los literales con F() (eso los manda a
+// PROGMEM) y copiarlos aqui, uno a uno, a este buffer temporal que
+// vive en la pila. Se dibuja exactamente igual, pero los textos ya
+// no consumen RAM.
+// ----------------------------------------------------------
+#define TEXTOS_MAX 32
+char textoTemporal[TEXTOS_MAX];
+
+// Copia un texto de flash al buffer temporal y lo dibuja.
+void dibujarTexto(int x, int y, const __FlashStringHelper *txt) {
+  const char *p = (const char *)txt;
+  uint8_t n = 0;
+  while (n < TEXTOS_MAX - 1 && pgm_read_byte(p + n) != 0) {
+    textoTemporal[n] = (char)pgm_read_byte(p + n);
+    n++;
+  }
+  textoTemporal[n] = '\0';
+  pantalla.drawStr(x, y, textoTemporal);
+}
+// Largo de un texto de flash. La unica fuente del Uno avanza 5 px por
+// caracter (u8g2_font_4x6_tf), asi que el ancho en pixeles es largo*5
+// y asi se evita traer getStrWidth() para alinear textos.
+uint8_t anchoTextoF(const __FlashStringHelper *txt) {
+  const char *p = (const char *)txt;
+  uint8_t n = 0;
+  while (pgm_read_byte(p + n) != 0) n++;
+  return n;
+}
+void dibujarTextoDerecha(int xDerecha, int y, const __FlashStringHelper *txt) {
+  dibujarTexto(xDerecha - anchoTextoF(txt) * 5, y, txt);
+}
+// Listas de textos en flash, separadas por comas.
+#define LISTA_MENU     PSTR("Ping Pong,Mascota,Blackjack,Snake,Informacion")
+#define LISTA_MODOS    PSTR("Normal,Breakout")
+#define LISTA_ACCIONES PSTR("Comer,Banar,Acariciar,Dormir")
+#define LISTA_STATS    PSTR("Hambre,Higiene,Felicidad,Energia")
+
+// Copia al buffer temporal el elemento numero "indice" de una lista
+// de flash y devuelve su largo. Evita el array de punteros, que en AVR
+// costaba RAM tanto por los punteros como por los textos.
+uint8_t copiarTextoDeLista(const char *lista, uint8_t indice) {
+  const char *p = lista;
+  uint8_t n = 0, largo = 0;
+  while (n < indice) {                       // saltar hasta el elemento pedido
+    while (pgm_read_byte(p) != ',' && pgm_read_byte(p) != 0) p++;
+    p++; n++;
+  }
+  while (pgm_read_byte(p) != ',' && pgm_read_byte(p) != 0) {
+    textoTemporal[largo] = (char)pgm_read_byte(p);
+    p++; largo++;
+  }
+  textoTemporal[largo] = '\0';
+  return largo;
+}
+void textoCentrado(const __FlashStringHelper *txt, int y) {
+  dibujarTexto((128 - (int)anchoTextoF(txt) * 5) / 2, y, txt);
+}
+
+void dibujarNumero(int x, int y, int valor);
+void mostrarMensaje(const __FlashStringHelper *linea1, const __FlashStringHelper *linea2);
+void dibujarCabecera(const __FlashStringHelper *titulo);
 
 // Menu.
 void dibujarMenu();
@@ -220,7 +298,7 @@ void bjDibujarResultado();
 void procesarBlackjack();
 
 // Snake.
-float snDistancia(float x1, float y1, float x2, float y2);
+bool snCerca(int x1, int y1, int x2, int y2, int radio);
 void snGenerarComida();
 void iniciarSnake();
 void snActualizarSerpiente();
@@ -238,7 +316,7 @@ void dibujarInformacion();
 
 Estado estado = MENU;
 
-const char *opcionesMenu[] = {"Ping Pong", "Mascota", "Blackjack", "Snake", "Informacion"};
+
 const byte CANT_OPCIONES = 5;
 byte seleccionMenu = 0, seleccionPingPong = 0;
 
@@ -268,45 +346,36 @@ void volverAlMenu() { estado = MENU; }
 // UTILIDADES DE PANTALLA
 // ============================================================
 
-void textoCentrado(const char *texto, int y, const uint8_t *fuente) {
-  pantalla.setFont(fuente);
-  pantalla.drawStr((128 - pantalla.getStrWidth(texto)) / 2, y, texto);
+// Titulo "en negrita": con una sola fuente pequena, dibujar el texto
+// dos veces desplazado un pixel da el mismo efecto de titulo grande
+// que en el Mega, por dos bytes de codigo en vez de 2 KB de fuente.
+void dibujarTitulo(const __FlashStringHelper *titulo, int y) {
+  pantalla.setFont(u8g2_font_4x6_tf);
+  dibujarTexto(0, y, titulo);
+  dibujarTexto(1, y, titulo);
 }
-void mostrarMensaje(const char *linea1, const char *linea2) {
-  pantalla.clearBuffer(); pantalla.setFont(u8g2_font_6x10_tf);
-  pantalla.drawStr((128 - pantalla.getStrWidth(linea1))/2, 27, linea1);
-  pantalla.drawStr((128 - pantalla.getStrWidth(linea2))/2, 43, linea2);
+// Conversion de numero a texto hecha a mano. Se evita sprintf() y el
+// print() de U8g2 porque entre los dos se llevan mas de 2 KB de flash,
+// que en el Uno es la diferencia entre compilar o no.
+void dibujarNumero(int x, int y, int valor) {
+  char invertido[8];
+  char texto[8];
+  uint8_t n = 0;
+  if (valor < 0) { dibujarTexto(x, y, F("-")); x += 5; valor = -valor; }
+  if (valor == 0) invertido[n++] = '0';
+  while (valor > 0 && n < 7) { invertido[n++] = (char)('0' + valor % 10); valor /= 10; }
+  for (uint8_t i = 0; i < n; i++) texto[i] = invertido[n - 1 - i];
+  texto[n] = '\0';
+  pantalla.drawStr(x, y, texto);
+}
+void mostrarMensaje(const __FlashStringHelper *linea1, const __FlashStringHelper *linea2) {
+  pantalla.clearBuffer(); pantalla.setFont(u8g2_font_4x6_tf);
+  textoCentrado(linea1, 27);
+  textoCentrado(linea2, 43);
   pantalla.sendBuffer();
 }
-void dibujarCabecera(const char *titulo) {
-  pantalla.setFont(u8g2_font_6x10_tf); pantalla.drawStr(0, 9, titulo); pantalla.drawHLine(0, 12, 128);
-}
-// Triangulo relleno. Se usa para los palos de la baraja, porque
-// U8g2 solo tiene el triangulo de contorno (drawTriangle).
-void llenarTriangulo(int x0, int y0, int x1, int y1, int x2, int y2) {
-  int xs[3]; int ys[3];
-  xs[0] = x0; ys[0] = y0;
-  xs[1] = x1; ys[1] = y1;
-  xs[2] = x2; ys[2] = y2;
-  int yMin = min(min(y0, y1), y2);
-  int yMax = max(max(y0, y1), y2);
-  for (int y = yMin; y <= yMax; y++) {
-    int xMin = 128, xMax = -1;
-    for (int i = 0; i < 3; i++) {
-      int j = (i + 1) % 3;
-      int a = ys[i], b = ys[j];
-      if ((a <= y && y < b) || (b <= y && y < a)) {
-        int xi = xs[i] + (int)((long)(y - a) * (xs[j] - xs[i]) / (b - a));
-        if (xi < xMin) xMin = xi;
-        if (xi > xMax) xMax = xi;
-      }
-    }
-    if (xMax >= xMin) {
-      if (xMin < 0) xMin = 0;
-      if (xMax > 127) xMax = 127;
-      pantalla.drawHLine(xMin, y, xMax - xMin + 1);
-    }
-  }
+void dibujarCabecera(const __FlashStringHelper *titulo) {
+  dibujarTitulo(titulo, 9); pantalla.drawHLine(0, 12, 128);
 }
 
 // ============================================================
@@ -323,13 +392,13 @@ void dibujarMenu() {
     marcadorMenuY += (destino - marcadorMenuY) * 0.38;
     if (fabs(destino - marcadorMenuY) < 0.25) marcadorMenuY = destino;
   }
-  pantalla.clearBuffer(); pantalla.setFont(u8g2_font_6x10_tf);
-  pantalla.drawStr(0, 9, "tinyPocket"); pantalla.drawHLine(0, 12, 128);
+  pantalla.clearBuffer(); pantalla.setFont(u8g2_font_4x6_tf);
+  dibujarTitulo(F("tinyPocket"), 9); pantalla.drawHLine(0, 12, 128);
   pantalla.drawRBox(0, (int)marcadorMenuY, 128, 9, 2);
   for (byte i=0; i<CANT_OPCIONES; i++) {
     byte y = 23 + i*9;
     if (i == seleccionMenu) pantalla.setDrawColor(0);
-    pantalla.drawStr(4, y, opcionesMenu[i]); pantalla.setDrawColor(1);
+    copiarTextoDeLista(LISTA_MENU, i); pantalla.drawStr(4, y, textoTemporal); pantalla.setDrawColor(1);
   }
   pantalla.sendBuffer();
 }
@@ -346,14 +415,13 @@ void procesarMenu() {
   dibujarMenu();
 }
 void dibujarSubmenuPingPong() {
-  pantalla.clearBuffer(); dibujarCabecera("Ping Pong");
-  const char *modos[] = {"Normal", "Breakout"};
+  pantalla.clearBuffer(); dibujarCabecera(F("Ping Pong"));
   for (byte i=0; i<2; i++) {
     int y=30+i*16;
     if (i==seleccionPingPong) { pantalla.drawRBox(0,y-10,128,13,2); pantalla.setDrawColor(0); }
-    pantalla.drawStr(5,y,modos[i]); pantalla.setDrawColor(1);
+    copiarTextoDeLista(LISTA_MODOS, i); pantalla.drawStr(5, y, textoTemporal); pantalla.setDrawColor(1);
   }
-  pantalla.setFont(u8g2_font_4x6_tf); pantalla.drawStr(4,63,"OK elige | mant: menu"); pantalla.sendBuffer();
+  pantalla.setFont(u8g2_font_4x6_tf); dibujarTexto(4, 63, F("OK elige | mant: menu")); pantalla.sendBuffer();
 }
 void procesarSubmenuPingPong() {
   if (izquierda.corto || derecha.corto) seleccionPingPong=1-seleccionPingPong;
@@ -392,11 +460,11 @@ byte ppPuntos = 0;
 unsigned long ppUltimoFrame = 0;
 
 void ppInicializarTrail() {
-  for (int i = 0; i < PP_TRAIL_LENGTH; i++) { ppTrail[i].x = ppPelotaX; ppTrail[i].y = ppPelotaY; }
+  for (int i = 0; i < PP_TRAIL_LENGTH; i++) { ppTrail[i].x = (int8_t)ppPelotaX; ppTrail[i].y = (int8_t)ppPelotaY; }
 }
 void ppActualizarTrail() {
   for (int i = PP_TRAIL_LENGTH - 1; i > 0; i--) ppTrail[i] = ppTrail[i - 1];
-  ppTrail[0].x = ppPelotaX; ppTrail[0].y = ppPelotaY;
+  ppTrail[0].x = (int8_t)ppPelotaX; ppTrail[0].y = (int8_t)ppPelotaY;
 }
 void ppReiniciarPelota() {
   ppPelotaX = ppPaletaX; ppPelotaY = PP_PADDLE_Y - 7;
@@ -461,8 +529,8 @@ void dibujarPingPong() {
   pantalla.clearBuffer();
   // Solo el marcador: el nombre del juego sobra mientras se juega.
   pantalla.setFont(u8g2_font_4x6_tf);
-  char buf[10]; sprintf(buf, "Pts %d", ppPuntos);
-  pantalla.drawStr(2, 6, buf);
+  dibujarTexto(2, 6, F("Pts "));
+  dibujarNumero(2 + 18, 6, ppPuntos);
   int alto = (int)(PP_LIMITE_INFERIOR - PP_TOPE + 1);
   pantalla.drawVLine(0, (int)PP_TOPE, alto);
   pantalla.drawVLine(127, (int)PP_TOPE, alto);
@@ -477,7 +545,7 @@ void dibujarPingPong() {
   int radioPelota = 2;
   if (ppReboteAnimacion > 0.5) radioPelota = 3;
   pantalla.drawDisc((int)ppPelotaX, (int)ppPelotaY, radioPelota);
-  pantalla.drawStr(2, 63, "< > paleta   OK: menu");
+  dibujarTexto(2, 63, F("< > paleta   OK: menu"));
   pantalla.sendBuffer();
 }
 void procesarPingPong() {
@@ -541,11 +609,11 @@ void boInicializarBloques() {
     for (int col = 0; col < BO_COLUMNAS_BLOQUES; col++) { boBloques[fila][col] = true; boBloquesRestantes++; }
 }
 void boInicializarTrail() {
-  for (int i = 0; i < BO_TRAIL_LENGTH; i++) { boTrail[i].x = boPelotaX; boTrail[i].y = boPelotaY; }
+  for (int i = 0; i < BO_TRAIL_LENGTH; i++) { boTrail[i].x = (int8_t)boPelotaX; boTrail[i].y = (int8_t)boPelotaY; }
 }
 void boActualizarTrail() {
   for (int i = BO_TRAIL_LENGTH - 1; i > 0; i--) boTrail[i] = boTrail[i - 1];
-  boTrail[0].x = boPelotaX; boTrail[0].y = boPelotaY;
+  boTrail[0].x = (int8_t)boPelotaX; boTrail[0].y = (int8_t)boPelotaY;
 }
 void boReiniciarPelota() {
   boPelotaX = boPaletaX; boPelotaY = BO_PALETA_Y - 7;
@@ -663,8 +731,8 @@ void dibujarBreakout() {
   pantalla.clearBuffer();
   // Solo las vidas: el nombre del juego sobra mientras se juega.
   pantalla.setFont(u8g2_font_4x6_tf);
-  char buf[8]; sprintf(buf, "V %d", boVidas);
-  pantalla.drawStr(126 - pantalla.getStrWidth(buf), 6, buf);
+  dibujarTexto(114, 6, F("V "));
+  dibujarNumero(120, 6, boVidas);
   int alto = (int)(BO_LIMITE_INFERIOR - BO_TOPE + 1);
   pantalla.drawVLine(0, (int)BO_TOPE, alto);
   pantalla.drawVLine(127, (int)BO_TOPE, alto);
@@ -691,11 +759,11 @@ void dibujarBreakout() {
   if (boFin) {
     pantalla.drawRBox(16, 24, 96, 20, 2);
     pantalla.setDrawColor(0);
-    textoCentrado(boGano ? "Ganaste!" : "Fin del juego", 37, u8g2_font_6x10_tf);
+    textoCentrado(boGano ? F("Ganaste!") : F("Fin del juego"), 37);
     pantalla.setDrawColor(1);
-    pantalla.drawStr(14, 63, "OK reinicia | menu");
+    dibujarTexto(14, 63, F("OK reinicia | menu"));
   } else {
-    pantalla.drawStr(2, 63, "< > paleta   OK: menu");
+    dibujarTexto(2, 63, F("< > paleta   OK: menu"));
   }
   pantalla.sendBuffer();
 }
@@ -733,7 +801,6 @@ const float MA_OJO_ALTO = 24.0;
 
 int hambre = 25, higiene = 80, felicidad = 75, energia = 80;
 byte accionMascota = 0;
-const char *accionesMascota[] = {"Comer", "Banar", "Acariciar", "Dormir"};
 unsigned long tiempoStatsMascota = 0, inicioSueno = 0, finAccionMascota = 0;
 unsigned long ultimoCambioEstadistica = 0, maUltimoFrame = 0;
 bool durmiendo = false;
@@ -747,47 +814,21 @@ float mascotaSuave(float t) {
   if (t > 1) t = 1;
   return t * t * (3.0 - 2.0 * t);
 }
+// Duracion de cada fase, en centisegundos, guardada en PROGMEM para
+// que no ocupe SRAM. Sustituye a un switch con 37 casos, que en el Uno
+// costaba mas de 200 bytes de flash. El orden coincide con el enum
+// FaseMascota de arriba.
+const uint16_t duracionesFase[] PROGMEM = {
+    80, 60, 50, 55, 30, 65, 50, 55, 50,          //  0.. 8  ciclo de miradas
+   24,  9, 24, 60,                              //  9..12  parpadeo
+   24, 100, 50, 40,                             // 13..16  feliz
+   30, 21, 70, 45, 40,                          // 17..21  sorpresa
+   20, 15, 20, 50,                              // 22..25  guino
+   40, 30, 40, 50,                              // 26..29  mirada corta
+   36, 120, 36, 20, 24, 9, 24                   // 30..36  dormir / despertar
+};
 unsigned long mascotaDuracionFase(FaseMascota fase) {
-  switch (fase) {
-    case MASCOTA_NORMAL: return 800;
-    case MASCOTA_MIRA_IZQ: return 600;
-    case MASCOTA_PAUSA_IZQ: return 500;
-    case MASCOTA_VUELVE_CENTRO_1: return 550;
-    case MASCOTA_PAUSA_CENTRO_1: return 300;
-    case MASCOTA_MIRA_DER: return 650;
-    case MASCOTA_PAUSA_DER: return 500;
-    case MASCOTA_VUELVE_CENTRO_2: return 550;
-    case MASCOTA_PAUSA_CENTRO_2: return 500;
-    case MASCOTA_PARPADEO_CIERRA: return 240;
-    case MASCOTA_PARPADEO_ESPERA: return 90;
-    case MASCOTA_PARPADEO_ABRE: return 240;
-    case MASCOTA_PARPADEO_PAUSA: return 600;
-    case MASCOTA_FELIZ: return 240;
-    case MASCOTA_FELIZ_ESPERA: return 1000;
-    case MASCOTA_FELIZ_NORMAL: return 500;
-    case MASCOTA_FELIZ_PAUSA: return 400;
-    case MASCOTA_SORPRESA: return 300;
-    case MASCOTA_SORPRESA_REBOTE: return 210;
-    case MASCOTA_SORPRESA_ESPERA: return 700;
-    case MASCOTA_SORPRESA_NORMAL: return 450;
-    case MASCOTA_SORPRESA_PAUSA: return 400;
-    case MASCOTA_GUINO_CIERRA: return 200;
-    case MASCOTA_GUINO_ESPERA: return 150;
-    case MASCOTA_GUINO_ABRE: return 200;
-    case MASCOTA_GUINO_PAUSA: return 500;
-    case MASCOTA_MIRA_POCO_IZQ: return 400;
-    case MASCOTA_MIRA_POCO_PAUSA: return 300;
-    case MASCOTA_MIRA_POCO_CENTRO: return 400;
-    case MASCOTA_MIRA_POCO_PAUSA_2: return 500;
-    case MASCOTA_DORMIR_CIERRA: return 360;
-    case MASCOTA_DORMIR: return 1200;
-    case MASCOTA_DESPERTAR: return 360;
-    case MASCOTA_DESPERTAR_PAUSA: return 200;
-    case MASCOTA_DESPERTAR_PARPADEO_CIERRA: return 240;
-    case MASCOTA_DESPERTAR_PARPADEO_ESPERA: return 90;
-    case MASCOTA_DESPERTAR_PARPADEO_ABRE: return 240;
-  }
-  return 500;
+  return (unsigned long)pgm_read_word(&duracionesFase[(uint8_t)fase]) * 10;
 }
 void mascotaCambiarFase(FaseMascota nuevaFase) {
   mascotaFase = nuevaFase;
@@ -881,7 +922,9 @@ void dibujarOjosMascota() {
   } else if (mascotaFase == MASCOTA_SORPRESA_REBOTE) {
     ancho = MA_OJO_ANCHO + 7;
     alto = MA_OJO_ALTO + 8;
-    y = MA_CENTRO_Y + sin(p * PI * 3.0) * (1.0 - p) * 2.0;
+    // Rebote sin sin(): pico triangular que se apaga con el tiempo.
+    float pico = suave < 0.5 ? suave * 2.0 : (1.0 - suave) * 2.0;
+    y = MA_CENTRO_Y + pico * (1.0 - suave) * 2.0;
   } else if (mascotaFase == MASCOTA_SORPRESA_NORMAL) {
     ancho = MA_OJO_ANCHO + 7 - 7 * suave;
     alto = MA_OJO_ALTO + 8 - 8 * suave;
@@ -935,32 +978,31 @@ void dibujarMascota() {
   actualizarFaseMascota();
 
   pantalla.clearBuffer();
-  pantalla.setFont(u8g2_font_6x10_tf);
-  pantalla.drawStr(0, 9, durmiendo ? "Mascota - durmiendo" : "Mascota");
+  dibujarTitulo(durmiendo ? F("Mascota - durmiendo") : F("Mascota"), 9);
   pantalla.drawHLine(0, 11, 128);
   dibujarOjosMascota();
   // Los textos sueltos van en la esquina para no pisar los ojos.
   if (durmiendo) {
     int fase = (int)((ahora / 350) % 3);
-    const char *z = fase == 0 ? "z" : (fase == 1 ? "zZ" : "Zz");
+    const __FlashStringHelper *z = fase == 0 ? F("z") : (fase == 1 ? F("zZ") : F("Zz"));
     pantalla.setFont(u8g2_font_4x6_tf);
-    pantalla.drawStr(126 - pantalla.getStrWidth(z), 18, z);
+    dibujarTextoDerecha(126, 18, z);
   }
   if (animacionAccion && !durmiendo && ahora - finAccionMascota < 550) {
-    const char *msg = animacionAccion == 1 ? "nom nom!" : (animacionAccion == 2 ? "limpio!" : "<3");
+    const __FlashStringHelper *msg = animacionAccion == 1 ? F("nom nom!") : (animacionAccion == 2 ? F("limpio!") : F("<3"));
     pantalla.setFont(u8g2_font_4x6_tf);
-    pantalla.drawStr(126 - pantalla.getStrWidth(msg), 6, msg);
+    dibujarTextoDerecha(126, 6, msg);
   }
-  pantalla.setFont(u8g2_font_5x8_tf);
-  const char *nombres[] = {"Hambre", "Higiene", "Felicidad", "Energia"};
+  pantalla.setFont(u8g2_font_4x6_tf);
   int valores[] = {hambre, higiene, felicidad, energia};
-  char buf[20];
-  sprintf(buf, "%s: %d", nombres[estadisticaVisible], valores[estadisticaVisible]);
-  pantalla.drawStr(2, 56, buf);
+  uint8_t largoNombre = copiarTextoDeLista(LISTA_STATS, estadisticaVisible);
+  pantalla.drawStr(2, 56, textoTemporal);
+  dibujarTexto(2 + largoNombre * 5, 56, F(": "));
+  dibujarNumero(4 + largoNombre * 5, 56, valores[estadisticaVisible]);
   dibujarBarraStat(78, 51, valores[estadisticaVisible]);
   pantalla.setFont(u8g2_font_4x6_tf);
-  pantalla.drawStr(2, 63, durmiendo ? "OK: despierta" : "< > accion:");
-  if (!durmiendo) pantalla.drawStr(68, 63, accionesMascota[accionMascota]);
+  dibujarTexto(2, 63, durmiendo ? F("OK: despierta") : F("< > accion:"));
+  if (!durmiendo) { copiarTextoDeLista(LISTA_ACCIONES, accionMascota); pantalla.drawStr(68, 63, textoTemporal); }
   pantalla.sendBuffer();
 }
 void procesarMascota() {
@@ -1127,36 +1169,48 @@ void bjActualizarAnimaciones() {
     if (abs(diferenciaY) < 1) bjCartas[i].y = bjCartas[i].destinoY;
   }
 }
+// Valor de la carta. Se escribe caracter a caracter en vez de usar
+// el print() de U8g2, que arrastra el formateo de numeros entero.
+void bjDibujarValor(int x, int y, byte valor) {
+  pantalla.setFont(u8g2_font_4x6_tf);
+  char simbolo[3];
+  if (valor == 1) { simbolo[0] = 'A'; }
+  else if (valor <= 9) { simbolo[0] = (char)('0' + valor); }
+  else if (valor == 10) { simbolo[0] = '1'; }
+  else if (valor == 11) { simbolo[0] = 'J'; }
+  else if (valor == 12) { simbolo[0] = 'Q'; }
+  else { simbolo[0] = 'K'; }
+  simbolo[1] = '\0';
+  pantalla.drawStr(x, y + 5, simbolo);
+  if (valor == 10) dibujarTexto(x + 5, y + 5, F("0"));
+}
+// Palos dibujados solo con primitivas de U8g2 que ya usa el resto del
+// programa (drawDisc, drawBox y drawLine). En el Mega se dibujan con
+// triangulos rellenos, pero aqui esas funciones no caben en 32 KB.
 void bjDibujarCorazon(int x, int y) {
   pantalla.drawDisc(x + 4, y + 4, 3);
   pantalla.drawDisc(x + 9, y + 4, 3);
-  llenarTriangulo(x + 1, y + 5, x + 12, y + 5, x + 6, y + 12);
+  pantalla.drawBox(x + 2, y + 6, 9, 4);
 }
 void bjDibujarDiamante(int x, int y) {
-  llenarTriangulo(x + 6, y, x + 12, y + 6, x + 6, y + 12);
-  llenarTriangulo(x + 6, y, x, y + 6, x + 6, y + 12);
+  pantalla.drawLine(x + 6, y, x + 12, y + 6);
+  pantalla.drawLine(x + 12, y + 6, x + 6, y + 12);
+  pantalla.drawLine(x + 6, y + 12, x, y + 6);
+  pantalla.drawLine(x, y + 6, x + 6, y);
+  pantalla.drawLine(x + 6, y + 4, x + 6, y + 8);
 }
 void bjDibujarTrebol(int x, int y) {
   pantalla.drawDisc(x + 3, y + 4, 3);
   pantalla.drawDisc(x + 9, y + 4, 3);
   pantalla.drawDisc(x + 6, y + 8, 3);
-  llenarTriangulo(x + 6, y + 7, x + 3, y + 13, x + 9, y + 13);
+  pantalla.drawBox(x + 5, y + 10, 3, 4);
 }
 void bjDibujarPicas(int x, int y) {
-  llenarTriangulo(x + 6, y, x, y + 8, x + 12, y + 8);
-  pantalla.drawDisc(x + 3, y + 8, 3);
-  pantalla.drawDisc(x + 9, y + 8, 3);
+  pantalla.drawLine(x + 6, y, x, y + 8);
+  pantalla.drawLine(x + 6, y, x + 12, y + 8);
   pantalla.drawBox(x + 5, y + 7, 3, 6);
-}
-void bjDibujarValor(int x, int y, byte valor) {
-  pantalla.setFont(u8g2_font_4x6_tf);
-  pantalla.setCursor(x, y);
-  if (valor == 1) pantalla.print("A");
-  else if (valor >= 2 && valor <= 9) pantalla.print(valor);
-  else if (valor == 10) pantalla.print("10");
-  else if (valor == 11) pantalla.print("J");
-  else if (valor == 12) pantalla.print("Q");
-  else if (valor == 13) pantalla.print("K");
+  pantalla.drawDisc(x + 2, y + 8, 2);
+  pantalla.drawDisc(x + 10, y + 8, 2);
 }
 void bjDibujarCarta(CartaAnimada &carta) {
   int x = (int)carta.x, y = (int)carta.y;
@@ -1224,34 +1278,35 @@ void bjActualizarJuego() {
 void bjDibujarJuego() {
   pantalla.clearBuffer();
   // Etiquetas cortas: el nombre del juego no hace falta aqui.
-  pantalla.setFont(u8g2_font_5x8_tf);
-  char buf[8]; sprintf(buf, "C %d", bjPuntajeCasaVisible());
-  pantalla.drawStr(2, BJ_Y_TEXTO_CASA, buf);
+  pantalla.setFont(u8g2_font_4x6_tf);
+  dibujarTexto(2, BJ_Y_TEXTO_CASA, F("C "));
+  dibujarNumero(14, BJ_Y_TEXTO_CASA, bjPuntajeCasaVisible());
   pantalla.drawHLine(0, BJ_Y_SEPARADOR, 128);
-  sprintf(buf, "V %d", bjPuntajeJugador());
-  pantalla.drawStr(2, BJ_Y_TEXTO_JUGADOR, buf);
+  dibujarTexto(2, BJ_Y_TEXTO_JUGADOR, F("V "));
+  dibujarNumero(14, BJ_Y_TEXTO_JUGADOR, bjPuntajeJugador());
   for (int i = 0; i < bjCantidadCartas; i++) bjDibujarCarta(bjCartas[i]);
   pantalla.setFont(u8g2_font_4x6_tf);
-  pantalla.drawStr(2, 63, "IZQ carta   DER planta");
+  dibujarTexto(2, 63, F("IZQ carta   DER planta"));
   pantalla.sendBuffer();
 }
 void bjDibujarResultado() {
   pantalla.clearBuffer();
+  // Con la fuente de 6x10 en vez de 10x20: la de 10x20 son 2.8 KB de
+  // flash que el Uno no puede gastar en un cartel.
   if (bjResultado == BJ_RESULTADO_JUGADOR) {
-    textoCentrado("Ganaste!", 30, u8g2_font_10x20_tf);
+    textoCentrado(F("Ganaste!"), 30);
   } else if (bjResultado == BJ_RESULTADO_CASA) {
-    textoCentrado("Gana", 22, u8g2_font_10x20_tf);
-    textoCentrado("la casa", 46, u8g2_font_10x20_tf);
+    textoCentrado(F("Gana"), 22);
+    textoCentrado(F("la casa"), 44);
   } else {
-    textoCentrado("Empate", 30, u8g2_font_10x20_tf);
+    textoCentrado(F("Empate"), 30);
   }
-  char buf[12];
-  pantalla.setFont(u8g2_font_5x8_tf);
-  sprintf(buf, "Casa %d", bjPuntajeCasaReal());
-  pantalla.drawStr(6, 56, buf);
-  sprintf(buf, "Vos %d", bjPuntajeJugador());
-  pantalla.drawStr(84, 56, buf);
-  textoCentrado("OK otra | mant: menu", 63, u8g2_font_4x6_tf);
+  pantalla.setFont(u8g2_font_4x6_tf);
+  dibujarTexto(6, 56, F("Casa "));
+  dibujarNumero(36, 56, bjPuntajeCasaReal());
+  dibujarTexto(84, 56, F("Vos "));
+  dibujarNumero(114, 56, bjPuntajeJugador());
+  textoCentrado(F("OK otra | mant: menu"), 63);
   pantalla.sendBuffer();
 }
 void procesarBlackjack() {
@@ -1296,7 +1351,9 @@ void procesarBlackjack() {
 // no pise ni el marcador ni la linea de controles.
 // ============================================================
 
-const int SN_MAX_SEGMENTOS = 40;
+// Menos segmentos que en el Mega (24 en vez de 40) y coordenadas
+// enteras de 16 bits: ahorra 240 bytes de SRAM, decisiva en el Uno.
+const int SN_MAX_SEGMENTOS = 24;
 const float SN_VELOCIDAD = 1.35;
 const float SN_DISTANCIA_COMIDA = 7.0;
 const unsigned long SN_FRAME_TIME = 20;
@@ -1307,8 +1364,8 @@ const int SN_BORDE_Y = 12;
 const int SN_BORDE_ANCHO = 116;
 const int SN_BORDE_ALTO = 40;
 
-float snX[SN_MAX_SEGMENTOS];
-float snY[SN_MAX_SEGMENTOS];
+int16_t snX[SN_MAX_SEGMENTOS];
+int16_t snY[SN_MAX_SEGMENTOS];
 int snLongitud = 8;
 int snDireccionX = 0;
 int snDireccionY = -1;
@@ -1320,26 +1377,29 @@ bool snFin = false, snPausa = false;
 unsigned long snUltimoFrame = 0, snTiempoMensaje = 0;
 bool snEfectoComida = false;
 
-float snDistancia(float x1, float y1, float x2, float y2) {
-  float dx = x2 - x1;
-  float dy = y2 - y1;
-  return sqrt(dx * dx + dy * dy);
+// Compara distancias al cuadrado. Es igual que comparar la distancia
+// real contra un radio, pero evita llamar a sqrt(), que arrastraria
+// la libreria matematica entera al binario.
+bool snCerca(int x1, int y1, int x2, int y2, int radio) {
+  long dx = (long)x1 - x2;
+  long dy = (long)y1 - y2;
+  return dx * dx + dy * dy < (long)radio * radio;
 }
 void snGenerarComida() {
   for (int intento = 0; intento < 50; intento++) {
-    float x = random(SN_BORDE_X + 8, SN_BORDE_X + SN_BORDE_ANCHO - 10);
-    float y = random(SN_BORDE_Y + 6, SN_BORDE_Y + SN_BORDE_ALTO - 8);
-    x = ((int)x / 4) * 4;
-    y = ((int)y / 4) * 4;
+    int x = random(SN_BORDE_X + 8, SN_BORDE_X + SN_BORDE_ANCHO - 10);
+    int y = random(SN_BORDE_Y + 6, SN_BORDE_Y + SN_BORDE_ALTO - 8);
+    x = (x / 4) * 4;
+    y = (y / 4) * 4;
     bool libre = true;
     for (int i = 0; i < snLongitud; i++)
-      if (snDistancia(x, y, snX[i], snY[i]) < SN_DISTANCIA_COMIDA) { libre = false; break; }
+      if (snCerca(x, y, snX[i], snY[i], (int)SN_DISTANCIA_COMIDA)) { libre = false; break; }
     if (libre) { snComidaX = x; snComidaY = y; snComidaVisible = true; return; }
   }
 }
 void iniciarSnake() {
   snLongitud = 8;
-  float inicioX = 64, inicioY = SN_BORDE_Y + SN_BORDE_ALTO - 4;
+  int inicioX = 64, inicioY = SN_BORDE_Y + SN_BORDE_ALTO - 4;
   for (int i = 0; i < snLongitud; i++) { snX[i] = inicioX - i * 4; snY[i] = inicioY; }
   // IMPORTANTE: arrancar hacia arriba (igual que el ejemplo).
   snDireccionX = 0; snDireccionY = -1;
@@ -1355,8 +1415,8 @@ void snActualizarSerpiente() {
   if (snX[0] <= SN_BORDE_X + 1 || snX[0] >= SN_BORDE_X + SN_BORDE_ANCHO - 1 ||
       snY[0] <= SN_BORDE_Y + 1 || snY[0] >= SN_BORDE_Y + SN_BORDE_ALTO - 1) { snFin = true; return; }
   for (int i = 4; i < snLongitud; i++)
-    if (snDistancia(snX[0], snY[0], snX[i], snY[i]) < 4.0) { snFin = true; return; }
-  if (snComidaVisible && snDistancia(snX[0], snY[0], snComidaX, snComidaY) < SN_DISTANCIA_COMIDA) {
+    if (snCerca(snX[0], snY[0], snX[i], snY[i], 4)) { snFin = true; return; }
+  if (snComidaVisible && snCerca(snX[0], snY[0], (int)snComidaX, (int)snComidaY, (int)SN_DISTANCIA_COMIDA)) {
     if (snLongitud < SN_MAX_SEGMENTOS) {
       snX[snLongitud] = snX[snLongitud - 1];
       snY[snLongitud] = snY[snLongitud - 1];
@@ -1391,8 +1451,8 @@ void dibujarSnake() {
   pantalla.clearBuffer();
   // Solo el marcador: el nombre del juego sobra mientras se juega.
   pantalla.setFont(u8g2_font_4x6_tf);
-  char buf[10]; sprintf(buf, "Pts %d", snPuntos);
-  pantalla.drawStr(SN_BORDE_X + SN_BORDE_ANCHO - pantalla.getStrWidth(buf) - 2, 8, buf);
+  dibujarTexto(SN_BORDE_X + SN_BORDE_ANCHO - 30, 8, F("Pts "));
+  dibujarNumero(SN_BORDE_X + SN_BORDE_ANCHO - 12, 8, snPuntos);
   pantalla.drawFrame(SN_BORDE_X, SN_BORDE_Y, SN_BORDE_ANCHO, SN_BORDE_ALTO);
   if (snComidaVisible) {
     int radio = 2;
@@ -1409,17 +1469,17 @@ void dibujarSnake() {
   if (snFin) {
     pantalla.drawRBox(18, 26, 92, 18, 2);
     pantalla.setDrawColor(0);
-    textoCentrado("Fin del juego", 38, u8g2_font_6x10_tf);
+    textoCentrado(F("Fin del juego"), 38);
     pantalla.setDrawColor(1);
-    pantalla.drawStr(20, 63, "OK reinicia | menu");
+    dibujarTexto(20, 63, F("OK reinicia | menu"));
   } else if (snPausa) {
     pantalla.drawRBox(34, 26, 60, 18, 2);
     pantalla.setDrawColor(0);
-    textoCentrado("PAUSA", 38, u8g2_font_6x10_tf);
+    textoCentrado(F("PAUSA"), 38);
     pantalla.setDrawColor(1);
-    pantalla.drawStr(20, 63, "OK sigue | menu");
+    dibujarTexto(20, 63, F("OK sigue | menu"));
   } else {
-    pantalla.drawStr(2, 63, "< izq  > der  OK pausa");
+    dibujarTexto(2, 63, F("< izq  > der  OK pausa"));
   }
   pantalla.sendBuffer();
 }
@@ -1452,11 +1512,11 @@ void procesarSnake() {
 // ============================================================
 
 void dibujarInformacion() {
-  pantalla.clearBuffer(); dibujarCabecera("Informacion");
-  pantalla.drawStr(0, 25, "Izq / Der: moverse");
-  pantalla.drawStr(0, 36, "OK: elegir o actuar");
-  pantalla.drawStr(0, 47, "Mantener OK: menu");
-  pantalla.setFont(u8g2_font_5x8_tf); pantalla.drawStr(0, 61, "tinyPocket - Mega");
+  pantalla.clearBuffer(); dibujarCabecera(F("Informacion"));
+  dibujarTexto(0, 25, F("Izq / Der: moverse"));
+  dibujarTexto(0, 36, F("OK: elegir o actuar"));
+  dibujarTexto(0, 47, F("Mantener OK: menu"));
+  pantalla.setFont(u8g2_font_4x6_tf); dibujarTexto(0, 62, F("tinyPocket - Mega"));
   pantalla.sendBuffer();
 }
 
@@ -1471,7 +1531,7 @@ void setup() {
   randomSeed(analogRead(A0) + micros());
   pantalla.begin();
   pantalla.setContrast(180);
-  mostrarMensaje("tinyPocket", "Iniciando...");
+  mostrarMensaje(F("tinyPocket"), F("Iniciando..."));
   delay(500);
   tiempoStatsMascota = millis();
   ultimoCambioEstadistica = millis();

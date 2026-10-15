@@ -1,472 +1,116 @@
 #include <Arduino.h>
 #include <Wire.h>
-#include <Adafruit_GFX.h>
-#include <Adafruit_SSD1306.h>
+#include <LiquidCrystal_I2C.h>
 
 // ============================================================
-// PING PONG - OLED 128x64
-// 1 sola paleta abajo
-// La pelota rebota arriba y contra los laterales
-// Animaciones no bloqueantes
+// TinyPocket - ejemplo de animacion: PING PONG
+// Version ATtiny85.
+//
+// El mismo rebote del juego final, llevado al LCD de 16x2: la
+// paleta del jugador va abajo y la de la maquina arriba, y la pelota
+// rebota en diagonal entre las dos filas. Aqui las paletas se mueven
+// solas para ver la animacion; en tinyPocket.ino las mueve el jugador
+// con los botones.
+//
+// Pantalla : LCD 16x2 I2C, direccion 0x27
+// I2C      : SDA -> PB0, SCL -> PB2
+// Botones  : PB3 (izq), PB4 (der), PB1 (OK) - no usados aqui
+//
+// Sin delay(): todo con millis().
+//
+// Compilar con:
+//   placa  : ATtiny25/45/85 (No bootloader), ATTinyCore, 8 MHz interno
 // ============================================================
 
-#define SCREEN_WIDTH 128
-#define SCREEN_HEIGHT 64
-#define OLED_RESET -1
-#define OLED_ADDRESS 0x3C
+#define LCD_ADDRESS 0x27
+const char CH_PELOTA = 0;
+const char CH_PALETA = 1;
 
-Adafruit_SSD1306 pantalla(
-  SCREEN_WIDTH,
-  SCREEN_HEIGHT,
-  &Wire,
-  OLED_RESET
-);
+LiquidCrystal_I2C lcd(LCD_ADDRESS, 16, 2);
+char buffer[33];
 
-// ============================================================
-// TIEMPO
-// ============================================================
+const unsigned long FRAME_TIME = 220;
+const int PUNTOS_GANAR = 5;
 
-const unsigned long FRAME_TIME = 16;
+int8_t pelotaX = 8, pelotaY = 0, velX = 1, velY = 1;
+int8_t paletaJugador = 8, paletaMaquina = 8;
+uint8_t puntosJugador = 0, puntosMaquina = 0;
 unsigned long ultimoFrame = 0;
 
-// ============================================================
-// PALETA
-// ============================================================
-
-const float PADDLE_WIDTH = 28.0;
-const float PADDLE_HEIGHT = 3.0;
-const float PADDLE_Y = 58.0;
-
-float paletaX = 64.0;
-float paletaObjetivoX = 64.0;
-
-// ============================================================
-// PELOTA
-// ============================================================
-
-const float BALL_RADIUS = 2.5;
-
-float pelotaX = 64.0;
-float pelotaY = 45.0;
-
-float pelotaAnteriorX = 64.0;
-float pelotaAnteriorY = 45.0;
-
-float velocidadX = 0.85;
-float velocidadY = -1.25;
-
-// ============================================================
-// TRAIL
-// ============================================================
-
-const int TRAIL_LENGTH = 8;
-
-struct Punto {
-  float x;
-  float y;
-};
-
-Punto trail[TRAIL_LENGTH];
-
-// ============================================================
-// ANIMACION DE REBOTE
-// ============================================================
-
-float reboteAnimacion = 0.0;
-
-// ============================================================
-// INICIALIZAR TRAIL
-// ============================================================
-
-void inicializarTrail() {
-
-  for (int i = 0; i < TRAIL_LENGTH; i++) {
-
-    trail[i].x = pelotaX;
-    trail[i].y = pelotaY;
-  }
+void crearCaracteres() {
+  uint8_t pelota[8] = {0x00, 0x0E, 0x1F, 0x1F, 0x1F, 0x0E, 0x00, 0x00};
+  uint8_t paleta[8] = {0x1F, 0x1F, 0x1F, 0x1F, 0x1F, 0x1F, 0x1F, 0x00};
+  lcd.createChar(CH_PELOTA, pelota);
+  lcd.createChar(CH_PALETA, paleta);
 }
-
-// ============================================================
-// ACTUALIZAR TRAIL
-// ============================================================
-
-void actualizarTrail() {
-
-  for (int i = TRAIL_LENGTH - 1; i > 0; i--) {
-
-    trail[i] = trail[i - 1];
-  }
-
-  trail[0].x = pelotaX;
-  trail[0].y = pelotaY;
+void borrarPantalla() {
+  for (uint8_t i = 0; i < 32; i++) buffer[i] = ' ';
+  buffer[32] = '\0';
 }
-
-// ============================================================
-// ACTUALIZAR PALETA
-// ============================================================
-
-void actualizarPaleta() {
-
-  // Movimiento automatico para probar el juego.
-  // Luego podemos cambiarlo por botones.
-
-  float tiempo =
-    millis() / 1000.0;
-
-  paletaObjetivoX =
-    64.0 +
-    sin(tiempo * 1.35) * 42.0;
-
-  paletaX +=
-    (paletaObjetivoX - paletaX) * 0.15;
-
-  if (paletaX < PADDLE_WIDTH / 2) {
-
-    paletaX =
-      PADDLE_WIDTH / 2;
-  }
-
-  if (paletaX >
-      SCREEN_WIDTH - PADDLE_WIDTH / 2) {
-
-    paletaX =
-      SCREEN_WIDTH - PADDLE_WIDTH / 2;
-  }
+void poner(uint8_t col, uint8_t fila, char c) {
+  if (col < 16) buffer[fila * 16 + col] = c;
 }
-
-// ============================================================
-// REBOTE LATERAL
-// ============================================================
-
-void comprobarParedesLaterales() {
-
-  if (pelotaX - BALL_RADIUS <= 1) {
-
-    pelotaX =
-      1 + BALL_RADIUS;
-
-    velocidadX =
-      fabs(velocidadX);
-
-    reboteAnimacion = 1.0;
-  }
-
-  if (pelotaX + BALL_RADIUS >=
-      SCREEN_WIDTH - 1) {
-
-    pelotaX =
-      SCREEN_WIDTH - 1 - BALL_RADIUS;
-
-    velocidadX =
-      -fabs(velocidadX);
-
-    reboteAnimacion = 1.0;
-  }
+void pintar() {
+  buffer[16] = '\0';
+  lcd.setCursor(0, 0);
+  lcd.print(buffer);
+  lcd.setCursor(0, 1);
+  lcd.print(buffer + 16);
 }
-
-// ============================================================
-// REBOTE ARRIBA
-// ============================================================
-
-void comprobarParedSuperior() {
-
-  if (pelotaY - BALL_RADIUS <= 1) {
-
-    pelotaY =
-      1 + BALL_RADIUS;
-
-    velocidadY =
-      fabs(velocidadY);
-
-    reboteAnimacion = 1.0;
-  }
-}
-
-// ============================================================
-// REBOTE PALETA
-// ============================================================
-
-void comprobarPaleta() {
-
-  float izquierda =
-    paletaX - PADDLE_WIDTH / 2;
-
-  float derecha =
-    paletaX + PADDLE_WIDTH / 2;
-
-  float arriba =
-    PADDLE_Y;
-
-  float abajo =
-    PADDLE_Y + PADDLE_HEIGHT;
-
-  bool tocaPaleta =
-    pelotaX + BALL_RADIUS >= izquierda &&
-    pelotaX - BALL_RADIUS <= derecha &&
-    pelotaY + BALL_RADIUS >= arriba &&
-    pelotaY - BALL_RADIUS <= abajo;
-
-  // Solo rebotar cuando la pelota viene hacia abajo.
-  if (tocaPaleta && velocidadY > 0) {
-
-    pelotaY =
-      arriba - BALL_RADIUS - 0.5;
-
-    // Rebote hacia arriba.
-    velocidadY =
-      -fabs(velocidadY);
-
-    // Cambiar direccion horizontal dependiendo
-    // de donde golpeo la pelota.
-    float diferencia =
-      pelotaX - paletaX;
-
-    velocidadX =
-      diferencia * 0.08;
-
-    // Evitar trayectoria demasiado vertical.
-    if (fabs(velocidadX) < 0.35) {
-
-      if (velocidadX >= 0) {
-
-        velocidadX = 0.35;
-
-      } else {
-
-        velocidadX = -0.35;
-      }
-    }
-
-    reboteAnimacion = 1.0;
-  }
-}
-
-// ============================================================
-// REINICIAR PELOTA
-// ============================================================
-
 void reiniciarPelota() {
-
-  pelotaX = paletaX;
-
-  pelotaY =
-    PADDLE_Y - 7;
-
-  pelotaAnteriorX =
-    pelotaX;
-
-  pelotaAnteriorY =
-    pelotaY;
-
-  velocidadX = 0.85;
-
-  velocidadY = -1.25;
-
-  inicializarTrail();
+  pelotaX = paletaJugador;
+  pelotaY = 1;
+  velX = (random(0, 2) ? 1 : -1);
+  velY = 1;
 }
-
-// ============================================================
-// ACTUALIZAR PELOTA
-// ============================================================
-
-void actualizarPelota() {
-
-  // Guardar posicion anterior.
-  pelotaAnteriorX =
-    pelotaX;
-
-  pelotaAnteriorY =
-    pelotaY;
-
-  // Actualizar trail.
-  actualizarTrail();
-
-  // Mover pelota.
-  pelotaX +=
-    velocidadX;
-
-  pelotaY +=
-    velocidadY;
-
-  // Rebotes.
-  comprobarParedesLaterales();
-
-  comprobarParedSuperior();
-
-  comprobarPaleta();
-
-  // Animacion.
-  if (reboteAnimacion > 0) {
-
-    reboteAnimacion -= 0.08;
-
-    if (reboteAnimacion < 0) {
-
-      reboteAnimacion = 0;
-    }
+void actualizar() {
+  // La maquina persigue la pelota mientras esta arriba.
+  if (pelotaY == 0) {
+    if (pelotaX > paletaMaquina) paletaMaquina++;
+    else if (pelotaX < paletaMaquina) paletaMaquina--;
   }
-
-  // Si la pelota pasa la paleta,
-  // reiniciar el juego.
-  if (pelotaY >
-      SCREEN_HEIGHT + 5) {
-
-    reiniciarPelota();
+  pelotaX = (int8_t)(pelotaX + velX);
+  if (pelotaX <= 0) { pelotaX = 0; velX = 1; }
+  if (pelotaX >= 15) { pelotaX = 15; velX = -1; }
+  pelotaY = (int8_t)(pelotaY + velY);
+  if (pelotaY <= 0) {
+    pelotaY = 0;
+    if (pelotaX - paletaMaquina <= 1 && paletaMaquina - pelotaX <= 1) velY = 1;
+    else { puntosJugador++; if (puntosJugador >= PUNTOS_GANAR) puntosJugador = 0; reiniciarPelota(); }
+  }
+  if (pelotaY >= 1) {
+    pelotaY = 1;
+    if (pelotaX - paletaJugador <= 1 && paletaJugador - pelotaX <= 1) velY = -1;
+    else { puntosMaquina++; if (puntosMaquina >= PUNTOS_GANAR) puntosMaquina = 0; reiniciarPelota(); }
   }
 }
-
-// ============================================================
-// DIBUJAR TRAIL
-// ============================================================
-
-void dibujarTrail() {
-
-  for (int i = TRAIL_LENGTH - 1;
-       i >= 0;
-       i--) {
-
-    int radio = 1;
-
-    if (i < 2) {
-      radio = 2;
-    }
-
-    pantalla.fillCircle(
-      trail[i].x,
-      trail[i].y,
-      radio,
-      SSD1306_WHITE
-    );
-  }
-}
-
-// ============================================================
-// DIBUJAR PALETA
-// ============================================================
-
-void dibujarPaleta() {
-
-  int izquierda =
-    paletaX -
-    PADDLE_WIDTH / 2;
-
-  pantalla.fillRoundRect(
-    izquierda,
-    PADDLE_Y,
-    PADDLE_WIDTH,
-    PADDLE_HEIGHT,
-    1,
-    SSD1306_WHITE
-  );
-}
-
-// ============================================================
-// DIBUJAR PELOTA
-// ============================================================
-
-void dibujarPelota() {
-
-  int radio =
-    BALL_RADIUS;
-
-  if (reboteAnimacion > 0.5) {
-
-    radio = 3;
-  }
-
-  pantalla.fillCircle(
-    pelotaX,
-    pelotaY,
-    radio,
-    SSD1306_WHITE
-  );
-}
-
-// ============================================================
-// DIBUJAR JUEGO
-// ============================================================
-
-void dibujarJuego() {
-
-  pantalla.clearDisplay();
-
-  // Pared izquierda.
-  pantalla.drawFastVLine(
-    0,
-    0,
-    SCREEN_HEIGHT,
-    SSD1306_WHITE
-  );
-
-  // Pared derecha.
-  pantalla.drawFastVLine(
-    SCREEN_WIDTH - 1,
-    0,
-    SCREEN_HEIGHT,
-    SSD1306_WHITE
-  );
-
-  // Pared superior.
-  pantalla.drawFastHLine(
-    0,
-    0,
-    SCREEN_WIDTH,
-    SSD1306_WHITE
-  );
-
-  dibujarTrail();
-
-  dibujarPaleta();
-
-  dibujarPelota();
-
-  pantalla.display();
-}
-
-// ============================================================
-// SETUP
-// ============================================================
-
 void setup() {
-
+  randomSeed(analogRead(A0) + micros());
   Wire.begin();
-
-  Wire.setClock(400000);
-
-  if (!pantalla.begin(
-        SSD1306_SWITCHCAPVCC,
-        OLED_ADDRESS
-      )) {
-
-    while (true) {
-    }
-  }
-
-  pantalla.clearDisplay();
-
-  pantalla.display();
-
-  inicializarTrail();
+  Wire.setClock(100000);
+  lcd.init();
+  lcd.backlight();
+  crearCaracteres();
 }
-
-// ============================================================
-// LOOP
-// ============================================================
-
 void loop() {
-
-  unsigned long ahora =
-    millis();
-
-  if (ahora - ultimoFrame >= FRAME_TIME) {
-
-    ultimoFrame = ahora;
-
-    actualizarPaleta();
-
-    actualizarPelota();
-
-    dibujarJuego();
-  }
+  if (millis() - ultimoFrame < FRAME_TIME) return;
+  ultimoFrame = millis();
+  // Sin botones: ambas paletas las mueve el programa.
+  if (pelotaX > paletaJugador && paletaJugador < 15) paletaJugador++;
+  else if (pelotaX < paletaJugador && paletaJugador > 0) paletaJugador--;
+  actualizar();
+  borrarPantalla();
+  poner((uint8_t)paletaMaquina, 0, CH_PALETA);
+  poner((uint8_t)paletaJugador, 1, CH_PALETA);
+  poner((uint8_t)pelotaX, (uint8_t)pelotaY, CH_PELOTA);
+  char fila[17];
+  uint8_t n = 0;
+  fila[n++] = 'T'; fila[n++] = 'u'; fila[n++] = 's';
+  fila[n++] = (char)('0' + puntosJugador);
+  fila[n++] = ' ';
+  fila[n++] = 'M'; fila[n++] = 'a'; fila[n++] = 'q';
+  fila[n++] = (char)('0' + puntosMaquina);
+  fila[n] = '\0';
+  for (uint8_t i = 0; i < n; i++) buffer[16 + i] = fila[i];
+  pintar();
 }
