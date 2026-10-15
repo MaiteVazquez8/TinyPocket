@@ -4,22 +4,28 @@ TinyPocket es una mini consola portátil desarrollada con un **ATtiny85**, una p
 
 El proyecto reúne diferentes minijuegos y una mascota virtual en un dispositivo de pequeño tamaño y bajo consumo, utilizando los recursos limitados del ATtiny85.
 
+## Simulación en Tinkered
+
+Podés acceder al proyecto y consultar la simulación desde el siguiente enlace:
+
+**[Abrir TinyPocket en Tinkered](https://app.tinkered.ai/p/172675c8-5722-4fdb-a319-6ffd4de13691)**
+
 ## Objetivo
 
 El objetivo de TinyPocket es desarrollar un dispositivo electrónico que combine programación embebida y electrónica mediante un sistema sencillo e interactivo.
 
 El proyecto permite trabajar con:
 
-* Microcontroladores.
-* Programación en C/C++.
-* Comunicación I²C.
-* Pantallas LCD.
-* Lectura de botones.
-* Antirrebote de pulsadores.
-* Máquinas de estados.
-* Temporizadores mediante `millis()`.
-* Generación de números aleatorios.
-* Desarrollo de minijuegos.
+- Microcontroladores.
+- Programación en C/C++.
+- Comunicación I²C.
+- Pantallas LCD.
+- Lectura de botones.
+- Antirrebote de pulsadores.
+- Máquinas de estados.
+- Temporizadores mediante `millis()`.
+- Generación de números aleatorios.
+- Desarrollo de minijuegos.
 
 ## Modos de juego
 
@@ -29,9 +35,9 @@ Minijuego en el que el jugador debe devolver una pelota utilizando una paleta.
 
 Controles:
 
-* **LEFT:** mover la paleta hacia arriba.
-* **RIGHT:** mover la paleta hacia abajo.
-* **OK:** volver al menú.
+- **LEFT:** mover la paleta hacia arriba.
+- **RIGHT:** mover la paleta hacia abajo.
+- **OK:** volver al menú.
 
 El jugador gana cuando consigue **5 puntos**.
 
@@ -39,16 +45,16 @@ El jugador gana cuando consigue **5 puntos**.
 
 Una mascota virtual cuenta con dos estadísticas:
 
-* Hambre.
-* Felicidad.
+- Hambre.
+- Felicidad.
 
 Ambas estadísticas disminuyen con el tiempo y el jugador debe mantenerlas utilizando los botones.
 
 Controles:
 
-* **LEFT:** alimentar.
-* **RIGHT:** jugar.
-* **OK:** volver al menú.
+- **LEFT:** alimentar.
+- **RIGHT:** jugar.
+- **OK:** volver al menú.
 
 La partida termina si alguna estadística llega a `0`.
 
@@ -60,9 +66,9 @@ Versión simplificada del juego Blackjack.
 
 Controles:
 
-* **LEFT:** pedir otra carta (`Hit`).
-* **RIGHT:** plantarse (`Stand`).
-* **OK:** continuar la ronda o volver al menú.
+- **LEFT:** pedir otra carta (`Hit`).
+- **RIGHT:** plantarse (`Stand`).
+- **OK:** continuar la ronda o volver al menú.
 
 El jugador gana la partida al conseguir **3 victorias** y pierde al alcanzar **3 derrotas**.
 
@@ -72,28 +78,28 @@ Versión de Snake adaptada a las dimensiones de una pantalla LCD 16×2.
 
 El tablero utiliza:
 
-* 16 columnas.
-* 2 filas.
-* 32 posiciones disponibles.
+- 16 columnas.
+- 2 filas.
+- 32 posiciones disponibles.
 
 Controles:
 
-* **LEFT:** girar hacia la izquierda.
-* **RIGHT:** girar hacia la derecha.
-* **OK:** volver al menú.
+- **LEFT:** girar hacia la izquierda.
+- **RIGHT:** girar hacia la derecha.
+- **OK:** volver al menú.
 
 La serpiente aumenta de tamaño al comer la comida y su velocidad aumenta progresivamente.
 
 ## Componentes
 
-| Componente                     |        Cantidad |
-| ------------------------------ | --------------: |
-| ATtiny85                       |               1 |
-| LCD 16×2 con módulo I²C        |               1 |
-| Pulsadores                     |               3 |
-| Switch                         |               1 |
-| Fuente de alimentación/batería |               1 |
-| Cables                         | Según necesidad |
+| Componente | Cantidad |
+|---|---:|
+| ATtiny85 | 1 |
+| LCD 16×2 con módulo I²C | 1 |
+| Pulsadores | 3 |
+| Switch | 1 |
+| Fuente de alimentación/batería | 1 |
+| Cables | Según necesidad |
 
 > **Importante:** verificar la tensión de funcionamiento de la LCD y del módulo I²C antes de realizar la conexión. Muchos módulos LCD 16×2 están diseñados para trabajar a 5 V.
 
@@ -102,26 +108,26 @@ La serpiente aumenta de tamaño al comer la comida y su velocidad aumenta progre
 ### ATtiny85 y LCD I²C
 
 | ATtiny85 | LCD I²C |
-| -------- | ------- |
-| PB0      | SDA     |
-| PB2      | SCL     |
-| VCC      | VCC     |
-| GND      | GND     |
+|---|---|
+| PB0 | SDA |
+| PB2 | SCL |
+| VCC | VCC |
+| GND | GND |
 
 ### ATtiny85 y botones
 
 | Botón | Pin del ATtiny85 |
-| ----- | ---------------- |
-| LEFT  | PB3              |
-| RIGHT | PB4              |
-| OK    | PB1              |
+|---|---|
+| LEFT | PB3 |
+| RIGHT | PB4 |
+| OK | PB1 |
 
 Cada botón se conecta entre su pin correspondiente y **GND**.
 
 El programa utiliza `INPUT_PULLUP`, por lo que el estado de los botones es:
 
-* Sin pulsar: `HIGH`
-* Pulsado: `LOW`
+- Sin pulsar: `HIGH`.
+- Pulsado: `LOW`.
 
 El switch funciona como interruptor general de alimentación.
 
@@ -159,10 +165,10 @@ Al encender TinyPocket se inicializa el ATtiny85, la comunicación I²C, la pant
 
 Luego se muestra el menú principal, desde donde se puede seleccionar uno de los cuatro modos:
 
-* Ping Pong.
-* Mascota.
-* Blackjack.
-* Snake.
+- Ping Pong.
+- Mascota.
+- Blackjack.
+- Snake.
 
 LEFT y RIGHT permiten desplazarse por las opciones y OK permite seleccionar el modo.
 
@@ -172,11 +178,11 @@ Cuando termina una partida, el usuario puede volver al menú y seleccionar otro 
 
 El proyecto está desarrollado utilizando:
 
-* **Arduino IDE**
-* **C/C++**
-* **ATtiny85**
-* **Wire**
-* **LiquidCrystal_I2C**
+- **Arduino IDE**
+- **C/C++**
+- **ATtiny85**
+- **Wire**
+- **LiquidCrystal_I2C**
 
 ## Cargar el programa
 
@@ -195,27 +201,25 @@ Para programar el ATtiny85:
 
 ## Controles
 
-| Modo      | LEFT            | RIGHT         | OK               |
-| --------- | --------------- | ------------- | ---------------- |
-| Menú      | Anterior        | Siguiente     | Entrar           |
-| Ping Pong | Arriba          | Abajo         | Menú             |
-| Mascota   | Alimentar       | Jugar         | Menú             |
-| Blackjack | Hit             | Stand         | Continuar / Menú |
-| Snake     | Girar izquierda | Girar derecha | Menú             |
+| Modo | LEFT | RIGHT | OK |
+|---|---|---|---|
+| Menú | Anterior | Siguiente | Entrar |
+| Ping Pong | Arriba | Abajo | Menú |
+| Mascota | Alimentar | Jugar | Menú |
+| Blackjack | Hit | Stand | Continuar / Menú |
+| Snake | Girar izquierda | Girar derecha | Menú |
 
 ## Estructura del repositorio
 
 ```text
 TinyPocket/
 │
-│   README.md
+├── README.md
 │
 ├── Docs/
 │
 ├── Img/
-│   │
 │   ├── circuitoDiagrama.png
-│   │
 │   └── Simulacion/
 │       ├── circuitoSimulado.png
 │       └── circuitoSimulado2.png
@@ -249,17 +253,17 @@ Es el programa principal de TinyPocket.
 
 Contiene la implementación de:
 
-* Menú.
-* Botones.
-* Pantalla LCD.
-* Ping Pong.
-* Mascota.
-* Blackjack.
-* Snake.
-* Estados de la aplicación.
-* Temporizadores.
-* Generación aleatoria.
-* Lógica de los juegos.
+- Menú.
+- Botones.
+- Pantalla LCD.
+- Ping Pong.
+- Mascota.
+- Blackjack.
+- Snake.
+- Estados de la aplicación.
+- Temporizadores.
+- Generación aleatoria.
+- Lógica de los juegos.
 
 #### `explicacion_codigo.md`
 
@@ -267,7 +271,7 @@ Contiene una explicación de las diferentes partes de `tinyPocket.ino`, incluyen
 
 ## Documentación del código
 
-Para conocer cómo está organizado y cómo funciona el código:
+Para conocer cómo está organizado y cómo funciona el código, consultá:
 
 `src/explicacion_codigo.md`
 
